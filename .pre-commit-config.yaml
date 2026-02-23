@@ -18,10 +18,9 @@ repos:
       - id: check-yaml
         args: [--unsafe]
 
-  # 3. Linter Code Python (Ruff)
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.6.2
+  # 3. Linter Code Rust (Fmt & Clippy)
+  - repo: https://github.com/doublify/pre-commit-rust
+    rev: v1.0
     hooks:
-      - id: ruff
-        args: [ --fix ]
-      - id: ruff-format
+      - id: fmt
+      - id: clippy

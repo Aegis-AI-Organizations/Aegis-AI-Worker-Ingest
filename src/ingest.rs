@@ -8,10 +8,15 @@ pub fn start_ingest() {
 
 #[cfg(test)]
 mod tests {
-    use super::startup_message;
+    use super::{start_ingest, startup_message};
 
     #[test]
     fn startup_message_matches_expected_banner() {
         assert_eq!(startup_message(), "Aegis AI Worker Ingest started.");
+    }
+
+    #[test]
+    fn start_ingest_executes_without_panic() {
+        start_ingest();
     }
 }

@@ -1,3 +1,3 @@
-# [FR] # Architecture | Aegis-AI-Worker-Ingest
+# Aegis AI Ingest Worker
 
-Document initialisé pour les tests de récupération Docusaurus par le plugin remote-content.
+Un worker de traitement de données à haut rendement faisant office de collecteur principal pour la télémétrie des agents de sécurité. Indexe les événements pour alimenter le moteur de graphe.

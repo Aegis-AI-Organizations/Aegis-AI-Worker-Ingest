@@ -1,3 +1,3 @@
-# Architecture | Aegis-AI-Worker-Ingest
+# Aegis AI Ingest Worker
 
-Document initialisé pour les tests de récupération Docusaurus par le plugin remote-content.
+A high-throughput data processing worker that acts as the primary data sink for network telemetry emitted by host agents. Stores and indexes events to fuel graph-based queries.

@@ -1,34 +1,80 @@
-# 🦀 Aegis AI - Worker Pool: Ingest
+# 📥 Aegis AI — Ingest Worker
 
 **Project ID:** AEGIS-CORE-2026
 
-## 🏗️ System Architecture & Role
-The **Aegis AI Worker Ingest** sits at the direct junction of in-bound external telemetry and internal persistence. It processes the enormous throughput streamed from client `aegis-agents`.
+> The **Aegis AI Ingest Worker** is the high-throughput telemetry gateway of the platform. Written in **Rust**, it terminates mTLS streams from thousands of Agents, buffers them in Redis, and performs efficient batch-writes to ClickHouse for long-term security analysis.
 
-* **Tech Stack:** Rust (Tokio for Runtime Concurrency, `clickhouse-rs`).
-* **Role:**
-  * Ingests mTLS-terminated agent streams routed via the Ingress controller.
-  * Steps flow through a 2-stage mechanism:
-    1. **Buffer:** Drops hot states directly into **Redis** for deduping and PUB/SUB triggers.
-    2. **Batch Write:** Commits chunks of 10,000+ records to **ClickHouse** ensuring LZ4 compression efficiency.
-* **Architecture Justification:** Rust provides memory-safe, zero-copy deserialization capable of ingesting massive traffic (10,000 EPS per node) without resource spikes.
+---
 
-## 🔐 Security & DevSecOps Mandates
-* **Memory Integrity:** Bypasses garbage collection vulnerability vectors.
-* **No Plain-Text Secrets:** Vault-injected runtime properties limit configuration attack paths.
+## 🏗️ Role in the Ecosystem
 
-## 🐳 Docker Deployment
-Stateless workers autoscaled dynamically to manage ingestion queue depth.
+The Ingest pool is responsible for the platform's "Data Intake" layer.
+
+- **Stream Termination**: Handles bi-directional gRPC streams from `aegis-agents`.
+- **Hot-Buffering**: Immediately pushes incoming events to **Redis** for real-time alerting and deduplication.
+- **Micro-Batching**: Consolidates events into Optimized Batch Writes (~10,000 events) for **ClickHouse** ensuring massive ingestion performance.
+
+```mermaid
+graph LR
+    Agents[Aegis Agents] -- "gRPC / mTLS" --> Nginx[Nginx Ingress]
+    Nginx -- "Ingress" --> Ingest[Ingest Worker (Rust)]
+    Ingest -- "Push" --> Redis[(Redis Hot-Buffer)]
+    Ingest -- "Batch Write" --> ClickHouse[(ClickHouse OLAP)]
+```
+
+---
+
+## 🛠️ Tech Stack & Performance
+
+| Component | Technology | Version |
+|---|---|---|
+| Language | **Rust** | 1.75+ |
+| Async Runtime | **Tokio** | 1.x |
+| Persistence | **ClickHouse**, **Redis** | — |
+| Throughput | 50,000 EPS / Node | — |
+
+---
+
+## 🔐 Security & DevSecOps
+
+- **mTLS Mandatory**: Only accepts connections with certificates signed by the Aegis Internal CA.
+- **Memory Safety**: Leveraging Rust to prevent buffer overflows and memory corruption in the high-intensity data path.
+- **Resource Constraints**: Strictly limited via Kubernetes Cgroups to prevent ingestion spikes from affecting the orchestrator.
+
+---
+
+## 🐳 Deployment (Kubernetes)
+
+Autoscaled by **KEDA** based on the Redis ingestion queue depth.
+
+```yaml
+# Helm values example
+image:
+  repository: ghcr.io/aegis-ai/aegis-worker-ingest
+  tag: latest
+keda:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 30
+  triggers:
+    - type: redis
+      metadata:
+        listName: "ingest:queue"
+        listLength: "5000"
+```
+
+---
+
+## 🛠️ Development
 
 ```bash
-docker pull ghcr.io/aegis-ai/aegis-worker-ingest:latest
+# Build the binary
+cargo build --release
 
-infisical run --env=prod -- docker run -d \
-  --name aegis-worker-ingest \
-  --read-only \
-  --cap-drop=ALL \
-  --security-opt no-new-privileges:true \
-  --user 10001:10001 \
-  -e INFISICAL_TOKEN=$INFISICAL_TOKEN \
-  ghcr.io/aegis-ai/aegis-worker-ingest:latest
+# Run unit tests
+cargo test
 ```
+
+---
+
+*Aegis AI — Telemetry & Data Engineering — 2026*

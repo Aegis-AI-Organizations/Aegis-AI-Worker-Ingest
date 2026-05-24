@@ -1,18 +1,25 @@
-# Optimized Dockerfile for Rust project
-# Stage 1: Build dependencies and binary
-FROM rust:1.76-alpine AS builder
-# Install musl tools for static compilation
-RUN apk add --no-cache musl-dev
+FROM rust:1.88-slim AS builder
+RUN apt-get update && apt-get install -y protobuf-compiler && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-# Copy the source code
-COPY . .
-# Build release binary (statically linked for musl) and install to /usr/local/cargo/bin/
-RUN cargo install --path . --root /usr/local/ || echo "Build failed or no Cargo.toml"
+
+# Copy dependency manifests
+COPY Cargo.toml Cargo.lock ./
+
+# Create dummy source and build dependencies to cache them
+RUN mkdir src && echo "fn main() {}" > src/main.rs
+RUN cargo build --release
+
+# Remove dummy build artifacts
+RUN rm -f target/release/deps/aegis_ai_worker_ingest* target/release/aegis-ai-worker-ingest*
+
+# Copy actual source code
+COPY src ./src
+
+# Build the actual application
+RUN cargo build --release && cp target/release/aegis-ai-worker-ingest /usr/local/bin/
 
 # Stage 2: Minimal Runtime
-FROM alpine:3.19
-RUN apk add --no-cache ca-certificates
-# Copy only the compiled binary
-COPY --from=builder /usr/local/bin/* /usr/local/bin/
-# Replace 'app' with the exact name of your binary
-CMD ["app"]
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /usr/local/bin/aegis-ai-worker-ingest /usr/local/bin/
+CMD ["aegis-ai-worker-ingest"]

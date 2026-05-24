@@ -1,7 +1,7 @@
-pub mod ingest;
-pub mod domain;
-pub mod workflows;
 pub mod activities;
+pub mod domain;
+pub mod ingest;
+pub mod workflows;
 
 use temporalio_client::{Client, ClientOptions, Connection, ConnectionOptions};
 use temporalio_sdk::{Worker, WorkerOptions};
@@ -21,9 +21,11 @@ async fn run() {
     }
 
     // clickhouse config
-    let clickhouse_host = std::env::var("CLICKHOUSE_HOST").unwrap_or_else(|_| "localhost".to_string());
+    let clickhouse_host =
+        std::env::var("CLICKHOUSE_HOST").unwrap_or_else(|_| "localhost".to_string());
     let clickhouse_port = std::env::var("CLICKHOUSE_PORT").unwrap_or_else(|_| "8123".to_string());
-    let clickhouse_user = std::env::var("CLICKHOUSE_USER").unwrap_or_else(|_| "default".to_string());
+    let clickhouse_user =
+        std::env::var("CLICKHOUSE_USER").unwrap_or_else(|_| "default".to_string());
     let clickhouse_password = std::env::var("CLICKHOUSE_PASSWORD").unwrap_or_default();
     let clickhouse_db = std::env::var("CLICKHOUSE_DB").unwrap_or_else(|_| "default".to_string());
 
@@ -40,8 +42,10 @@ async fn run() {
     }
 
     // --- Temporal Client & Worker Setup ---
-    let temporal_host = std::env::var("TEMPORAL_HOST").unwrap_or_else(|_| "localhost:7233".to_string());
-    let temporal_namespace = std::env::var("TEMPORAL_NAMESPACE").unwrap_or_else(|_| "default".to_string());
+    let temporal_host =
+        std::env::var("TEMPORAL_HOST").unwrap_or_else(|_| "localhost:7233".to_string());
+    let temporal_namespace =
+        std::env::var("TEMPORAL_NAMESPACE").unwrap_or_else(|_| "default".to_string());
 
     // Connect to Temporal
     let temp_url_str = if temporal_host.contains("://") {
@@ -49,11 +53,11 @@ async fn run() {
     } else {
         format!("http://{}", temporal_host)
     };
-    let temp_url = Url::parse(&temp_url_str)
-        .unwrap_or_else(|_| Url::parse("http://localhost:7233").unwrap());
+    let temp_url =
+        Url::parse(&temp_url_str).unwrap_or_else(|_| Url::parse("http://localhost:7233").unwrap());
 
     println!("Connecting to Temporal at {}...", temp_url_str);
-    
+
     // We create the runtime
     let runtime_options = RuntimeOptions::builder().build().unwrap();
     let runtime = CoreRuntime::new_assume_tokio(runtime_options).unwrap();
@@ -71,10 +75,12 @@ async fn run() {
         .expect("Failed to create Temporal client");
 
     // MinIO Client setup for activities
-    let minio_endpoint = std::env::var("MINIO_ENDPOINT").unwrap_or_else(|_| "localhost:9000".to_string());
+    let minio_endpoint =
+        std::env::var("MINIO_ENDPOINT").unwrap_or_else(|_| "localhost:9000".to_string());
     let minio_access_key = std::env::var("MINIO_ACCESS_KEY").unwrap_or_default();
     let minio_secret_key = std::env::var("MINIO_SECRET_KEY").unwrap_or_default();
-    let minio_bucket_name = std::env::var("MINIO_BUCKET").unwrap_or_else(|_| "aegis-ingest".to_string());
+    let minio_bucket_name =
+        std::env::var("MINIO_BUCKET").unwrap_or_else(|_| "aegis-ingest".to_string());
 
     let s3_endpoint = if minio_endpoint.contains("://") {
         minio_endpoint.clone()
@@ -92,13 +98,18 @@ async fn run() {
         None,
         None,
         None,
-    ).unwrap();
-    let minio_bucket = s3::Bucket::new(&minio_bucket_name, s3_region, s3_credentials).unwrap().with_path_style();
+    )
+    .unwrap();
+    let minio_bucket = s3::Bucket::new(&minio_bucket_name, s3_region, s3_credentials)
+        .unwrap()
+        .with_path_style();
 
     // Neo4j config setup for activities
-    let neo4j_url = std::env::var("NEO4J_URL").unwrap_or_else(|_| "http://localhost:7474".to_string());
+    let neo4j_url =
+        std::env::var("NEO4J_URL").unwrap_or_else(|_| "http://localhost:7474".to_string());
     let neo4j_user = std::env::var("NEO4J_USER").unwrap_or_else(|_| "neo4j".to_string());
-    let neo4j_password = std::env::var("NEO4J_PASSWORD").unwrap_or_else(|_| "neo4j_password".to_string());
+    let neo4j_password =
+        std::env::var("NEO4J_PASSWORD").unwrap_or_else(|_| "neo4j_password".to_string());
     use base64::Engine;
     let auth_raw = format!("{}:{}", neo4j_user, neo4j_password);
     let auth_b64 = base64::engine::general_purpose::STANDARD.encode(auth_raw);
@@ -114,7 +125,7 @@ async fn run() {
             neo4j_auth,
         })
         .build();
-    
+
     let mut worker = Worker::new(&runtime, temporal_client, worker_options).unwrap();
     println!("Temporal Worker started on queue INGEST_TASK_QUEUE");
     if let Err(e) = worker.run().await {
@@ -148,7 +159,9 @@ async fn init_clickhouse(client: &clickhouse::Client) -> anyhow::Result<()> {
             }
         }
     }
-    Err(anyhow::anyhow!("Could not initialize ClickHouse after several retries"))
+    Err(anyhow::anyhow!(
+        "Could not initialize ClickHouse after several retries"
+    ))
 }
 
 #[tokio::main]

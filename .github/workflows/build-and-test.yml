@@ -8,6 +8,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+      - name: Install protobuf compiler
+        if: hashFiles('Cargo.toml') != ''
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Build
         run: if [ -f Cargo.toml ]; then cargo build --verbose; else echo "No Cargo.toml, skipping"; fi
       - name: Run tests with coverage

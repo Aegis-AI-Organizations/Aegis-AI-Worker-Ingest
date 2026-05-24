@@ -20,6 +20,9 @@ jobs:
       with:
         go-version: 'stable'
 
+    - name: Install protobuf compiler
+      if: hashFiles('Cargo.toml') != ''
+      run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
     - name: Run code linters (pre-commit)
       uses: pre-commit/action@v3.0.1

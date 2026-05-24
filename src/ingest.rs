@@ -100,18 +100,12 @@ pub async fn flush_batch(batch: &mut Vec<BatchedEvent>, client: &clickhouse::Cli
         .iter()
         .map(|item| {
             let (event_type, source, message, value) = match &item.event {
-                SystemEvent::Log { source, message } => (
-                    "Log".to_string(),
-                    source.clone(),
-                    message.clone(),
-                    0.0,
-                ),
-                SystemEvent::Metric { name, value } => (
-                    "Metric".to_string(),
-                    name.clone(),
-                    "".to_string(),
-                    *value,
-                ),
+                SystemEvent::Log { source, message } => {
+                    ("Log".to_string(), source.clone(), message.clone(), 0.0)
+                }
+                SystemEvent::Metric { name, value } => {
+                    ("Metric".to_string(), name.clone(), "".to_string(), *value)
+                }
             };
             ClickHouseEventRow {
                 event_type,
@@ -143,7 +137,9 @@ pub async fn flush_batch(batch: &mut Vec<BatchedEvent>, client: &clickhouse::Cli
             let err_str = err.to_string();
             eprintln!("Failed to flush batch to ClickHouse: {}", err_str);
             for item in batch.drain(..) {
-                let _ = item.ack.send(Err(anyhow::anyhow!("ClickHouse error: {}", err_str)));
+                let _ = item
+                    .ack
+                    .send(Err(anyhow::anyhow!("ClickHouse error: {}", err_str)));
             }
         }
     }
@@ -209,7 +205,6 @@ where
 pub fn spawn_default_ingest_loop(receiver: mpsc::Receiver<EventEnvelope>) -> JoinHandle<()> {
     spawn_ingest_loop(receiver, Arc::new(ClickHouseEventProcessor::default()))
 }
-
 
 #[cfg(test)]
 mod tests {

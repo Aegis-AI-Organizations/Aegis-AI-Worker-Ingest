@@ -17,7 +17,7 @@ The Ingest pool is responsible for the platform's "Data Intake" layer.
 ```mermaid
 graph LR
     Agents[Aegis Agents] -- "gRPC / mTLS" --> Nginx[Nginx Ingress]
-    Nginx -- "Ingress" --> Ingest[Ingest Worker (Rust)]
+    Nginx -- "Ingress" --> Ingest[Ingest Worker - Rust]
     Ingest -- "Push" --> Redis[(Redis Hot-Buffer)]
     Ingest -- "Batch Write" --> ClickHouse[(ClickHouse OLAP)]
 ```

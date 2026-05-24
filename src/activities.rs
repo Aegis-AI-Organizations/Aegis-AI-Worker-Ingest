@@ -1,9 +1,9 @@
-use std::time::SystemTime;
-use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use temporalio_sdk::activities::{ActivityContext, ActivityError};
+use std::sync::Arc;
+use std::time::SystemTime;
 use temporalio_macros::activities;
+use temporalio_sdk::activities::{ActivityContext, ActivityError};
 
 use crate::domain::NetworkTopologyPayload;
 use crate::ingest::ClickHouseEventRow;
@@ -46,12 +46,15 @@ impl IngestActivities {
         _bucket: String,
         key: String,
     ) -> Result<String, ActivityError> {
-        let response = self.minio_bucket.get_object(&key).await
+        let response = self
+            .minio_bucket
+            .get_object(&key)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to download file from MinIO: {}", e))?;
-        
+
         let content = String::from_utf8(response.to_vec())
             .map_err(|e| anyhow::anyhow!("Topology file is not valid UTF-8: {}", e))?;
-        
+
         Ok(content)
     }
 
@@ -105,13 +108,21 @@ impl IngestActivities {
         }
 
         if !rows.is_empty() {
-            let mut insert = self.clickhouse_client.insert("system_events")
-                .map_err(|e| anyhow::anyhow!("Failed to initialize ClickHouse insert query: {}", e))?;
+            let mut insert = self
+                .clickhouse_client
+                .insert("system_events")
+                .map_err(|e| {
+                    anyhow::anyhow!("Failed to initialize ClickHouse insert query: {}", e)
+                })?;
             for row in rows {
-                insert.write(&row).await
+                insert
+                    .write(&row)
+                    .await
                     .map_err(|e| anyhow::anyhow!("Failed to write row to ClickHouse: {}", e))?;
             }
-            insert.end().await
+            insert
+                .end()
+                .await
                 .map_err(|e| anyhow::anyhow!("Failed to finalize ClickHouse transaction: {}", e))?;
         }
 
@@ -164,7 +175,8 @@ impl IngestActivities {
             // Containers running on Host
             for container in &host.containers {
                 statements.push(Neo4jStatement {
-                    statement: "MERGE (c:Container {id: $id}) SET c.name = $name, c.image = $image".to_string(),
+                    statement: "MERGE (c:Container {id: $id}) SET c.name = $name, c.image = $image"
+                        .to_string(),
                     parameters: json!({
                         "id": container.id,
                         "name": container.name,
@@ -205,25 +217,36 @@ impl IngestActivities {
         if !statements.is_empty() {
             let client = reqwest::Client::new();
             let url = format!("{}/db/neo4j/tx/commit", self.neo4j_url);
-            let response = client.post(&url)
+            let response = client
+                .post(&url)
                 .header("Authorization", &self.neo4j_auth)
                 .json(&Neo4jTxRequest { statements })
                 .send()
                 .await
-                .map_err(|e| anyhow::anyhow!("Failed to send Cypher transaction to Neo4j: {}", e))?;
+                .map_err(|e| {
+                    anyhow::anyhow!("Failed to send Cypher transaction to Neo4j: {}", e)
+                })?;
 
             if !response.status().is_success() {
-                return Err(anyhow::anyhow!("Neo4j transaction HTTP error: {}", response.status()).into());
+                return Err(
+                    anyhow::anyhow!("Neo4j transaction HTTP error: {}", response.status()).into(),
+                );
             }
 
-            let tx_resp: Neo4jTxResponse = response.json().await
+            let tx_resp: Neo4jTxResponse = response
+                .json()
+                .await
                 .map_err(|e| anyhow::anyhow!("Failed to parse Neo4j response: {}", e))?;
 
             if !tx_resp.errors.is_empty() {
-                let err_msgs: Vec<String> = tx_resp.errors.into_iter()
+                let err_msgs: Vec<String> = tx_resp
+                    .errors
+                    .into_iter()
                     .map(|e| format!("{}: {}", e.code, e.message))
                     .collect();
-                return Err(anyhow::anyhow!("Neo4j execution errors: {}", err_msgs.join("; ")).into());
+                return Err(
+                    anyhow::anyhow!("Neo4j execution errors: {}", err_msgs.join("; ")).into(),
+                );
             }
         }
 

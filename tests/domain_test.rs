@@ -363,6 +363,11 @@ async fn test_write_graph_to_neo4j_success() {
     let mut server = mockito::Server::new_async().await;
     let _m = server
         .mock("POST", "/db/neo4j/tx/commit")
+        .match_body(mockito::Matcher::AllOf(vec![
+            mockito::Matcher::Regex("UNWIND \\$hosts AS host MERGE".to_string()),
+            mockito::Matcher::Regex("UNWIND \\$containers AS container MERGE".to_string()),
+            mockito::Matcher::Regex("UNWIND \\$processes AS process MERGE".to_string()),
+        ]))
         .with_status(200)
         .with_body(r#"{"errors": []}"#)
         .create_async()
@@ -414,6 +419,61 @@ async fn test_write_graph_to_neo4j_success() {
     .to_string();
 
     let res = activities.write_graph_to_neo4j_impl(payload_json).await;
+
+    assert!(res.is_ok());
+}
+
+#[tokio::test]
+async fn test_write_graph_to_neo4j_batches_1000_hosts_in_one_transaction() {
+    use aegis_ai_worker_ingest::activities::IngestActivities;
+    use serde_json::json;
+    use std::sync::Arc;
+
+    let mut server = mockito::Server::new_async().await;
+    let _m = server
+        .mock("POST", "/db/neo4j/tx/commit")
+        .match_body(mockito::Matcher::AllOf(vec![
+            mockito::Matcher::Regex("UNWIND \\$hosts AS host MERGE".to_string()),
+            mockito::Matcher::Regex("\"id\":\"h0\"".to_string()),
+            mockito::Matcher::Regex("\"id\":\"h999\"".to_string()),
+        ]))
+        .with_status(200)
+        .with_body(r#"{"errors": []}"#)
+        .expect(1)
+        .create_async()
+        .await;
+
+    let s3_region = s3::region::Region::Custom {
+        region: "us-east-1".to_owned(),
+        endpoint: "http://127.0.0.1:9000".to_owned(),
+    };
+    let s3_credentials =
+        s3::creds::Credentials::new(Some("access"), Some("secret"), None, None, None).unwrap();
+    let minio_bucket = s3::Bucket::new("test-bucket", s3_region, s3_credentials)
+        .unwrap()
+        .with_path_style();
+    let activities = Arc::new(IngestActivities {
+        minio_bucket,
+        clickhouse_client: clickhouse::Client::default(),
+        neo4j_url: server.url(),
+        neo4j_auth: "Basic dGVzdDp0ZXN0".to_string(),
+    });
+
+    let hosts = (0..1000)
+        .map(|index| {
+            json!({
+                "id": format!("h{}", index),
+                "hostname": format!("host-{}", index),
+                "ipAddresses": ["10.0.0.1"],
+                "containers": [],
+                "processes": []
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let res = activities
+        .write_graph_to_neo4j_impl(json!({ "hosts": hosts }).to_string())
+        .await;
 
     assert!(res.is_ok());
 }

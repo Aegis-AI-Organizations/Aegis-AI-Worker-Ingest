@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 use temporalio_macros::activities;
 use temporalio_sdk::activities::{ActivityContext, ActivityError};
 
@@ -166,83 +166,111 @@ impl IngestActivities {
         let payload: NetworkTopologyPayload = serde_json::from_str(&payload_json)
             .map_err(|e| anyhow::anyhow!("Failed to parse topology JSON: {}", e))?;
 
-        let mut statements = Vec::new();
+        let started_at = Instant::now();
+        let mut hosts = Vec::new();
+        let mut containers = Vec::new();
+        let mut processes = Vec::new();
+        let mut host_containers = Vec::new();
+        let mut host_processes = Vec::new();
+        let mut container_processes = Vec::new();
 
         for host in &payload.hosts {
-            // MERGE Host node
-            statements.push(Neo4jStatement {
-                statement: "MERGE (h:Host {id: $id}) SET h.hostname = $hostname, h.ipAddresses = $ipAddresses".to_string(),
-                parameters: json!({
-                    "id": host.id,
-                    "hostname": host.hostname,
-                    "ipAddresses": host.ip_addresses,
-                }),
-            });
+            hosts.push(json!({
+                "id": host.id,
+                "hostname": host.hostname,
+                "ipAddresses": host.ip_addresses,
+            }));
 
-            // Processes running on Host directly
             for process in &host.processes {
-                statements.push(Neo4jStatement {
-                    statement: "MERGE (p:Process {id: $id}) SET p.name = $name, p.commandLine = $commandLine, p.user = $user, p.pid = $pid".to_string(),
-                    parameters: json!({
-                        "id": format!("{}-proc-{}", host.id, process.pid),
+                let process_id = format!("{}-proc-{}", host.id, process.pid);
+                processes.push(json!({
+                    "id": process_id,
+                    "pid": process.pid,
+                    "name": process.name,
+                    "commandLine": process.command_line,
+                    "user": process.user,
+                }));
+                host_processes.push(json!({
+                    "hostId": host.id,
+                    "processId": process_id,
+                }));
+            }
+
+            for container in &host.containers {
+                containers.push(json!({
+                    "id": container.id,
+                    "name": container.name,
+                    "image": container.image,
+                }));
+                host_containers.push(json!({
+                    "hostId": host.id,
+                    "containerId": container.id,
+                }));
+
+                for process in &container.processes {
+                    let process_id = format!("{}-proc-{}", container.id, process.pid);
+                    processes.push(json!({
+                        "id": process_id,
                         "pid": process.pid,
                         "name": process.name,
                         "commandLine": process.command_line,
                         "user": process.user,
-                    }),
-                });
-                statements.push(Neo4jStatement {
-                    statement: "MATCH (h:Host {id: $hostId}), (p:Process {id: $procId}) MERGE (h)-[:RUNS_PROCESS]->(p)".to_string(),
-                    parameters: json!({
-                        "hostId": host.id,
-                        "procId": format!("{}-proc-{}", host.id, process.pid),
-                    }),
-                });
-            }
-
-            // Containers running on Host
-            for container in &host.containers {
-                statements.push(Neo4jStatement {
-                    statement: "MERGE (c:Container {id: $id}) SET c.name = $name, c.image = $image"
-                        .to_string(),
-                    parameters: json!({
-                        "id": container.id,
-                        "name": container.name,
-                        "image": container.image,
-                    }),
-                });
-                statements.push(Neo4jStatement {
-                    statement: "MATCH (h:Host {id: $hostId}), (c:Container {id: $containerId}) MERGE (h)-[:RUNS_CONTAINER]->(c)".to_string(),
-                    parameters: json!({
-                        "hostId": host.id,
+                    }));
+                    container_processes.push(json!({
                         "containerId": container.id,
-                    }),
-                });
-
-                // Processes running inside Container
-                for process in &container.processes {
-                    statements.push(Neo4jStatement {
-                        statement: "MERGE (p:Process {id: $id}) SET p.name = $name, p.commandLine = $commandLine, p.user = $user, p.pid = $pid".to_string(),
-                        parameters: json!({
-                            "id": format!("{}-proc-{}", container.id, process.pid),
-                            "pid": process.pid,
-                            "name": process.name,
-                            "commandLine": process.command_line,
-                            "user": process.user,
-                        }),
-                    });
-                    statements.push(Neo4jStatement {
-                        statement: "MATCH (c:Container {id: $containerId}), (p:Process {id: $procId}) MERGE (c)-[:RUNS_PROCESS]->(p)".to_string(),
-                        parameters: json!({
-                            "containerId": container.id,
-                            "procId": format!("{}-proc-{}", container.id, process.pid),
-                        }),
-                    });
+                        "processId": process_id,
+                    }));
                 }
             }
         }
 
+        let node_count = hosts.len() + containers.len() + processes.len();
+        let mut statements = Vec::new();
+
+        if !hosts.is_empty() {
+            statements.push(Neo4jStatement {
+                statement: "UNWIND $hosts AS host MERGE (h:Host {id: host.id}) SET h.hostname = host.hostname, h.ipAddresses = host.ipAddresses".to_string(),
+                parameters: json!({ "hosts": hosts }),
+            });
+        }
+
+        if !containers.is_empty() {
+            statements.push(Neo4jStatement {
+                statement: "UNWIND $containers AS container MERGE (c:Container {id: container.id}) SET c.name = container.name, c.image = container.image".to_string(),
+                parameters: json!({ "containers": containers }),
+            });
+        }
+
+        if !processes.is_empty() {
+            statements.push(Neo4jStatement {
+                statement: "UNWIND $processes AS process MERGE (p:Process {id: process.id}) SET p.name = process.name, p.commandLine = process.commandLine, p.user = process.user, p.pid = process.pid".to_string(),
+                parameters: json!({ "processes": processes }),
+            });
+        }
+
+        if !host_containers.is_empty() {
+            statements.push(Neo4jStatement {
+                statement: "UNWIND $relations AS relation MATCH (h:Host {id: relation.hostId}), (c:Container {id: relation.containerId}) MERGE (h)-[:RUNS_CONTAINER]->(c)".to_string(),
+                parameters: json!({ "relations": host_containers }),
+            });
+        }
+
+        if !host_processes.is_empty() {
+            statements.push(Neo4jStatement {
+                statement: "UNWIND $relations AS relation MATCH (h:Host {id: relation.hostId}), (p:Process {id: relation.processId}) MERGE (h)-[:RUNS_PROCESS]->(p)".to_string(),
+                parameters: json!({ "relations": host_processes }),
+            });
+        }
+
+        if !container_processes.is_empty() {
+            statements.push(Neo4jStatement {
+                statement: "UNWIND $relations AS relation MATCH (c:Container {id: relation.containerId}), (p:Process {id: relation.processId}) MERGE (c)-[:RUNS_PROCESS]->(p)".to_string(),
+                parameters: json!({ "relations": container_processes }),
+            });
+        }
+
         if !statements.is_empty() {
+            let statement_count = statements.len();
             let client = reqwest::Client::new();
             let url = format!("{}/db/neo4j/tx/commit", self.neo4j_url);
             let response = client
@@ -276,6 +304,13 @@ impl IngestActivities {
                     anyhow::anyhow!("Neo4j execution errors: {}", err_msgs.join("; ")).into(),
                 );
             }
+
+            println!(
+                "Neo4j topology batch ingested: {} nodes in {} statements ({} ms)",
+                node_count,
+                statement_count,
+                started_at.elapsed().as_millis()
+            );
         }
 
         Ok(())

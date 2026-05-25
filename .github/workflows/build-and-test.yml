@@ -17,7 +17,7 @@ jobs:
         run: |
           if [ -f Cargo.toml ]; then
             cargo install cargo-tarpaulin
-            cargo tarpaulin --verbose --fail-under 80 --exclude-files src/main.rs
+            cargo tarpaulin --verbose --fail-under 80 --exclude-files src/main.rs src/workflows.rs
           else
             echo "No Cargo.toml, skipping"
           fi

@@ -601,3 +601,140 @@ async fn test_write_graph_to_neo4j_execution_error() {
 
     assert!(res.is_err());
 }
+
+#[tokio::test]
+async fn test_write_graph_to_neo4j_writes_host_process_relationships() {
+    use aegis_ai_worker_ingest::activities::IngestActivities;
+    use std::sync::Arc;
+
+    let mut server = mockito::Server::new_async().await;
+    let _m = server
+        .mock("POST", "/db/neo4j/tx/commit")
+        .match_body(mockito::Matcher::AllOf(vec![
+            mockito::Matcher::Regex("MERGE \\(p:Process".to_string()),
+            mockito::Matcher::Regex("RUNS_PROCESS".to_string()),
+            mockito::Matcher::Regex("\"processId\":\"h1-proc-456\"".to_string()),
+        ]))
+        .with_status(200)
+        .with_body(r#"{"errors":[]}"#)
+        .expect(1)
+        .create_async()
+        .await;
+
+    let s3_region = s3::region::Region::Custom {
+        region: "us-east-1".to_owned(),
+        endpoint: "http://127.0.0.1:9000".to_owned(),
+    };
+    let s3_credentials =
+        s3::creds::Credentials::new(Some("access"), Some("secret"), None, None, None).unwrap();
+    let minio_bucket = s3::Bucket::new("test-bucket", s3_region, s3_credentials)
+        .unwrap()
+        .with_path_style();
+
+    let activities = Arc::new(IngestActivities {
+        minio_bucket,
+        clickhouse_client: clickhouse::Client::default(),
+        neo4j_url: server.url(),
+        neo4j_auth: "Basic dGVzdDp0ZXN0".to_string(),
+    });
+
+    let payload_json = r#"{
+        "hosts": [
+            {
+                "id": "h1",
+                "hostname": "host1",
+                "ipAddresses": [],
+                "containers": [],
+                "processes": [{
+                    "pid": 456,
+                    "name": "agent",
+                    "commandLine": "/usr/bin/agent",
+                    "user": "root"
+                }]
+            }
+        ]
+    }"#
+    .to_string();
+
+    let res = activities.write_graph_to_neo4j_impl(payload_json).await;
+
+    assert!(res.is_ok());
+}
+
+#[tokio::test]
+async fn test_write_graph_to_neo4j_invalid_response_json() {
+    use aegis_ai_worker_ingest::activities::IngestActivities;
+    use std::sync::Arc;
+
+    let mut server = mockito::Server::new_async().await;
+    let _m = server
+        .mock("POST", "/db/neo4j/tx/commit")
+        .with_status(200)
+        .with_body("invalid response")
+        .expect(1)
+        .create_async()
+        .await;
+
+    let s3_region = s3::region::Region::Custom {
+        region: "us-east-1".to_owned(),
+        endpoint: "http://127.0.0.1:9000".to_owned(),
+    };
+    let s3_credentials =
+        s3::creds::Credentials::new(Some("access"), Some("secret"), None, None, None).unwrap();
+    let minio_bucket = s3::Bucket::new("test-bucket", s3_region, s3_credentials)
+        .unwrap()
+        .with_path_style();
+
+    let activities = Arc::new(IngestActivities {
+        minio_bucket,
+        clickhouse_client: clickhouse::Client::default(),
+        neo4j_url: server.url(),
+        neo4j_auth: "Basic dGVzdDp0ZXN0".to_string(),
+    });
+
+    let payload_json = r#"{
+        "hosts": [
+            {
+                "id": "h1",
+                "hostname": "host1",
+                "ipAddresses": [],
+                "containers": [],
+                "processes": []
+            }
+        ]
+    }"#
+    .to_string();
+
+    let res = activities.write_graph_to_neo4j_impl(payload_json).await;
+
+    assert!(res.is_err());
+}
+
+#[tokio::test]
+async fn test_write_graph_to_neo4j_empty_topology_is_a_no_op() {
+    use aegis_ai_worker_ingest::activities::IngestActivities;
+    use std::sync::Arc;
+
+    let s3_region = s3::region::Region::Custom {
+        region: "us-east-1".to_owned(),
+        endpoint: "http://127.0.0.1:9000".to_owned(),
+    };
+    let s3_credentials =
+        s3::creds::Credentials::new(Some("access"), Some("secret"), None, None, None).unwrap();
+    let minio_bucket = s3::Bucket::new("test-bucket", s3_region, s3_credentials)
+        .unwrap()
+        .with_path_style();
+
+    let activities = Arc::new(IngestActivities {
+        minio_bucket,
+        clickhouse_client: clickhouse::Client::default(),
+        neo4j_url: "http://unused.invalid".to_string(),
+        neo4j_auth: "Basic dGVzdDp0ZXN0".to_string(),
+    });
+
+    let res = activities
+        .write_graph_to_neo4j_impl(r#"{"hosts":[]}"#.to_string())
+        .await;
+
+    assert!(res.is_ok());
+}

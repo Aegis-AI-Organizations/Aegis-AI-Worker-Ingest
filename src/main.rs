@@ -1,7 +1,4 @@
-pub mod activities;
-pub mod domain;
-pub mod ingest;
-pub mod workflows;
+use aegis_ai_worker_ingest::{activities, ingest, workflows};
 
 use temporalio_client::{Client, ClientOptions, Connection, ConnectionOptions};
 use temporalio_sdk::{Worker, WorkerOptions};

@@ -46,11 +46,43 @@ impl IngestActivities {
         _bucket: String,
         key: String,
     ) -> Result<String, ActivityError> {
+        self.download_topology_file_impl(key).await
+    }
+
+    #[activity]
+    pub async fn write_telemetry_to_clickhouse(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        payload_json: String,
+    ) -> Result<(), ActivityError> {
+        self.write_telemetry_to_clickhouse_impl(payload_json).await
+    }
+
+    #[activity]
+    pub async fn write_graph_to_neo4j(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        payload_json: String,
+    ) -> Result<(), ActivityError> {
+        self.write_graph_to_neo4j_impl(payload_json).await
+    }
+}
+
+impl IngestActivities {
+    pub async fn download_topology_file_impl(&self, key: String) -> Result<String, ActivityError> {
         let response = self
             .minio_bucket
             .get_object(&key)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to download file from MinIO: {}", e))?;
+
+        if !(200..300).contains(&response.status_code()) {
+            return Err(anyhow::anyhow!(
+                "Failed to download file from MinIO: HTTP {}",
+                response.status_code()
+            )
+            .into());
+        }
 
         let content = String::from_utf8(response.to_vec())
             .map_err(|e| anyhow::anyhow!("Topology file is not valid UTF-8: {}", e))?;
@@ -58,10 +90,8 @@ impl IngestActivities {
         Ok(content)
     }
 
-    #[activity]
-    pub async fn write_telemetry_to_clickhouse(
-        self: Arc<Self>,
-        _ctx: ActivityContext,
+    pub async fn write_telemetry_to_clickhouse_impl(
+        &self,
         payload_json: String,
     ) -> Result<(), ActivityError> {
         let payload: NetworkTopologyPayload = serde_json::from_str(&payload_json)
@@ -129,10 +159,8 @@ impl IngestActivities {
         Ok(())
     }
 
-    #[activity]
-    pub async fn write_graph_to_neo4j(
-        self: Arc<Self>,
-        _ctx: ActivityContext,
+    pub async fn write_graph_to_neo4j_impl(
+        &self,
         payload_json: String,
     ) -> Result<(), ActivityError> {
         let payload: NetworkTopologyPayload = serde_json::from_str(&payload_json)

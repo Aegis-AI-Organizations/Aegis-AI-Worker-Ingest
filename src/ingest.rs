@@ -209,7 +209,8 @@ pub fn spawn_default_ingest_loop(receiver: mpsc::Receiver<EventEnvelope>) -> Joi
 #[cfg(test)]
 mod tests {
     use super::{
-        ClickHouseEventProcessor, EventEnvelope, EventProcessor, SystemEvent, spawn_ingest_loop,
+        BatchedEvent, ClickHouseEventProcessor, EventEnvelope, EventProcessor, SystemEvent,
+        spawn_ingest_loop,
     };
     use anyhow::{Result, anyhow};
     use std::collections::VecDeque;
@@ -217,7 +218,7 @@ mod tests {
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
-    use tokio::sync::{Mutex, Notify, mpsc};
+    use tokio::sync::{Mutex, Notify, mpsc, oneshot};
     use tokio::time::{Duration, timeout};
 
     #[derive(Debug)]
@@ -370,5 +371,257 @@ mod tests {
             .unwrap();
 
         loop_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_clickhouse_event_processor_process_success() {
+        let (tx, mut rx) = mpsc::channel(10);
+        let processor = ClickHouseEventProcessor::new(tx);
+
+        let process_future = processor.process(SystemEvent::Log {
+            source: "test".to_string(),
+            message: "msg".to_string(),
+        });
+
+        let receive_future = async {
+            let batched = rx.recv().await.unwrap();
+            assert!(matches!(batched.event, SystemEvent::Log { .. }));
+            batched.ack.send(Ok(())).unwrap();
+        };
+
+        let (res, _) = tokio::join!(process_future, receive_future);
+        assert!(res.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_clickhouse_event_processor_process_error() {
+        let (tx, mut rx) = mpsc::channel(10);
+        let processor = ClickHouseEventProcessor::new(tx);
+
+        let process_future = processor.process(SystemEvent::Log {
+            source: "test".to_string(),
+            message: "msg".to_string(),
+        });
+
+        let receive_future = async {
+            let batched = rx.recv().await.unwrap();
+            batched.ack.send(Err(anyhow::anyhow!("error"))).unwrap();
+        };
+
+        let (res, _) = tokio::join!(process_future, receive_future);
+        assert!(res.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_flush_batch_success() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("POST", "/")
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .create_async()
+            .await;
+
+        let client = clickhouse::Client::default()
+            .with_url(server.url())
+            .with_database("test_db");
+
+        let (ack_tx, ack_rx) = oneshot::channel();
+        let mut batch = vec![BatchedEvent {
+            event: SystemEvent::Log {
+                source: "test".to_string(),
+                message: "msg".to_string(),
+            },
+            ack: ack_tx,
+        }];
+
+        super::flush_batch(&mut batch, &client).await;
+        assert!(batch.is_empty());
+        let res = ack_rx.await.unwrap();
+        assert!(res.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_flush_batch_error() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("POST", "/")
+            .match_query(mockito::Matcher::Any)
+            .with_status(500)
+            .create_async()
+            .await;
+
+        let client = clickhouse::Client::default()
+            .with_url(server.url())
+            .with_database("test_db");
+
+        let (ack_tx, ack_rx) = oneshot::channel();
+        let mut batch = vec![BatchedEvent {
+            event: SystemEvent::Log {
+                source: "test".to_string(),
+                message: "msg".to_string(),
+            },
+            ack: ack_tx,
+        }];
+
+        super::flush_batch(&mut batch, &client).await;
+        assert!(batch.is_empty());
+        let res = ack_rx.await.unwrap();
+        assert!(res.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_run_batching_loop_interval() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("POST", "/")
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .create_async()
+            .await;
+
+        let client = clickhouse::Client::default()
+            .with_url(server.url())
+            .with_database("test_db");
+
+        let (tx, rx) = mpsc::channel(10);
+        let loop_handle = tokio::spawn(super::run_batching_loop(rx, client));
+
+        let (ack_tx, ack_rx) = oneshot::channel();
+        tx.send(BatchedEvent {
+            event: SystemEvent::Log {
+                source: "test".to_string(),
+                message: "msg".to_string(),
+            },
+            ack: ack_tx,
+        })
+        .await
+        .unwrap();
+
+        // Wait for interval tick (1s) to trigger flush
+        let res = timeout(Duration::from_millis(1500), ack_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(res.is_ok());
+
+        loop_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_spawn_default_ingest_loop() {
+        let (tx, rx) = mpsc::channel(2);
+        let loop_handle = super::spawn_default_ingest_loop(rx);
+        let (envelope, ack_rx) = EventEnvelope::new(SystemEvent::Metric {
+            name: "test".to_string(),
+            value: 1.0,
+        });
+        tx.send(envelope).await.unwrap();
+        // Since ClickHouseEventProcessor::default() sender is None, it should return Ok(()) immediately
+        let res = timeout(Duration::from_millis(100), ack_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(res, ());
+        loop_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_flush_batch_empty() {
+        let client = clickhouse::Client::default()
+            .with_url("http://localhost:8123")
+            .with_database("test_db");
+        let mut batch = Vec::new();
+        super::flush_batch(&mut batch, &client).await;
+        assert!(batch.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_run_batching_loop_full_batch() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("POST", "/")
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .create_async()
+            .await;
+
+        let client = clickhouse::Client::default()
+            .with_url(server.url())
+            .with_database("test_db");
+
+        let (tx, rx) = mpsc::channel(1005);
+        let loop_handle = tokio::spawn(super::run_batching_loop(rx, client));
+
+        let mut receivers = Vec::new();
+        for _ in 0..1000 {
+            let (ack_tx, ack_rx) = oneshot::channel();
+            tx.send(BatchedEvent {
+                event: SystemEvent::Log {
+                    source: "test".to_string(),
+                    message: "msg".to_string(),
+                },
+                ack: ack_tx,
+            })
+            .await
+            .unwrap();
+            receivers.push(ack_rx);
+        }
+
+        // Since batch size reaches 1000, it should flush immediately without waiting for interval
+        for rx in receivers {
+            let res = timeout(Duration::from_millis(200), rx)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(res.is_ok());
+        }
+
+        loop_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_run_batching_loop_close() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("POST", "/")
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .create_async()
+            .await;
+
+        let client = clickhouse::Client::default()
+            .with_url(server.url())
+            .with_database("test_db");
+
+        let (tx, rx) = mpsc::channel(10);
+        let loop_handle = tokio::spawn(super::run_batching_loop(rx, client));
+
+        let (ack_tx, ack_rx) = oneshot::channel();
+        tx.send(BatchedEvent {
+            event: SystemEvent::Log {
+                source: "test".to_string(),
+                message: "msg".to_string(),
+            },
+            ack: ack_tx,
+        })
+        .await
+        .unwrap();
+
+        // Drop sender to close channel
+        drop(tx);
+
+        // It should flush the remaining batch on close and terminate
+        let res = timeout(Duration::from_millis(200), ack_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(res.is_ok());
+
+        // Wait for loop to finish
+        timeout(Duration::from_millis(200), loop_handle)
+            .await
+            .unwrap()
+            .unwrap();
     }
 }

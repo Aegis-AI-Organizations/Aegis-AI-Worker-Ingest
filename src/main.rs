@@ -1,6 +1,9 @@
 use aegis_ai_worker_ingest::{activities, ingest, workflows};
 
-use temporalio_client::{Client, ClientOptions, Connection, ConnectionOptions};
+use std::fs;
+use temporalio_client::{
+    Client, ClientOptions, ClientTlsOptions, Connection, ConnectionOptions, TlsOptions,
+};
 use temporalio_sdk::{Worker, WorkerOptions};
 use temporalio_sdk_core::{CoreRuntime, RuntimeOptions, Url};
 
@@ -43,10 +46,15 @@ async fn run() {
         std::env::var("TEMPORAL_HOST").unwrap_or_else(|_| "localhost:7233".to_string());
     let temporal_namespace =
         std::env::var("TEMPORAL_NAMESPACE").unwrap_or_else(|_| "default".to_string());
+    let temporal_tls_enabled = std::env::var("TEMPORAL_TLS_ENABLE")
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false);
 
     // Connect to Temporal
     let temp_url_str = if temporal_host.contains("://") {
         temporal_host.clone()
+    } else if temporal_tls_enabled {
+        format!("https://{}", temporal_host)
     } else {
         format!("http://{}", temporal_host)
     };
@@ -59,7 +67,14 @@ async fn run() {
     let runtime_options = RuntimeOptions::builder().build().unwrap();
     let runtime = CoreRuntime::new_assume_tokio(runtime_options).unwrap();
 
-    let connection_options = ConnectionOptions::new(temp_url).build();
+    let tls_options = if temporal_tls_enabled {
+        Some(build_temporal_tls_options().expect("Failed to build Temporal TLS options"))
+    } else {
+        None
+    };
+    let connection_options = ConnectionOptions::new(temp_url)
+        .maybe_tls_options(tls_options)
+        .build();
     let connection = match Connection::connect(connection_options).await {
         Ok(c) => c,
         Err(e) => {
@@ -128,6 +143,30 @@ async fn run() {
     if let Err(e) = worker.run().await {
         eprintln!("Temporal Worker error: {}", e);
     }
+}
+
+fn build_temporal_tls_options() -> anyhow::Result<TlsOptions> {
+    let ca_path = std::env::var("TEMPORAL_TLS_CA_PATH").ok();
+    let cert_path = std::env::var("TEMPORAL_TLS_CERT_PATH").ok();
+    let key_path = std::env::var("TEMPORAL_TLS_KEY_PATH").ok();
+    let server_name = std::env::var("TEMPORAL_TLS_SERVER_NAME").ok();
+
+    let client_tls_options = match (cert_path, key_path) {
+        (Some(cert_path), Some(key_path)) => Some(ClientTlsOptions {
+            client_cert: fs::read(cert_path)?,
+            client_private_key: fs::read(key_path)?,
+        }),
+        (None, None) => None,
+        _ => anyhow::bail!(
+            "TEMPORAL_TLS_CERT_PATH and TEMPORAL_TLS_KEY_PATH must be configured together"
+        ),
+    };
+
+    Ok(TlsOptions {
+        server_root_ca_cert: ca_path.map(fs::read).transpose()?,
+        domain: server_name,
+        client_tls_options,
+    })
 }
 
 async fn init_clickhouse(client: &clickhouse::Client) -> anyhow::Result<()> {

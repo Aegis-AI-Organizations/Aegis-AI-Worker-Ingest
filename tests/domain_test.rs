@@ -32,7 +32,8 @@ fn test_deserialize_topology() {
                 ],
                 "processes": []
             }
-        ]
+        ],
+        "routes": []
     }"#;
 
     let payload: NetworkTopologyPayload = serde_json::from_str(json_data).unwrap();
@@ -82,13 +83,16 @@ fn test_minio_notification_serde() {
 #[test]
 fn test_topology_derived_traits() {
     use aegis_ai_worker_ingest::domain::{
-        NetworkTopologyPayload, ProtoContainer, ProtoHost, ProtoPort, ProtoProcess,
+        NetworkTopologyPayload, ProtoContainer, ProtoHost, ProtoPort, ProtoProcess, ProtoRoute,
     };
 
     let port = ProtoPort {
         number: 80,
         protocol: "tcp".to_string(),
         state: Some("LISTEN".to_string()),
+        host_ip: Some("0.0.0.0".to_string()),
+        host_port: Some(8080),
+        source: Some("docker_port_bindings".to_string()),
     };
 
     let process = ProtoProcess {
@@ -102,8 +106,14 @@ fn test_topology_derived_traits() {
         id: "c1".to_string(),
         name: "nginx-container".to_string(),
         image: "nginx:latest".to_string(),
+        image_sha256: Some("sha256:test".to_string()),
+        env: std::collections::BTreeMap::from([(String::from("FOO"), String::from("bar"))]),
         processes: vec![process.clone()],
         ports: vec![port.clone()],
+        exposed_ports: vec![port.clone()],
+        privileged: Some(false),
+        run_as_root: Some(true),
+        sensitive_volumes: vec!["/var/run/secrets".to_string()],
     };
 
     let host = ProtoHost {
@@ -116,6 +126,22 @@ fn test_topology_derived_traits() {
 
     let payload = NetworkTopologyPayload {
         hosts: vec![host.clone()],
+        routes: vec![ProtoRoute {
+            kind: "k8s_service".to_string(),
+            source_kind: "service".to_string(),
+            source_name: "web".to_string(),
+            source_namespace: Some("default".to_string()),
+            target_kind: "service".to_string(),
+            target_name: "web".to_string(),
+            target_namespace: Some("default".to_string()),
+            host: Some("example.com".to_string()),
+            path: Some("/".to_string()),
+            path_type: Some("Prefix".to_string()),
+            protocol: "tcp".to_string(),
+            source_port: Some(443),
+            target_port: Some("http".to_string()),
+            published_port: Some(443),
+        }],
     };
 
     // Exercise Debug and Clone
@@ -131,6 +157,7 @@ fn test_topology_derived_traits() {
     let deserialized: NetworkTopologyPayload = serde_json::from_str(&serialized).unwrap();
     assert_eq!(deserialized.hosts[0].hostname, "test-host");
     assert_eq!(deserialized.hosts[0].containers[0].ports[0].number, 80);
+    assert_eq!(deserialized.routes[0].kind, "k8s_service");
 }
 
 #[tokio::test]
@@ -367,6 +394,8 @@ async fn test_write_graph_to_neo4j_success() {
             mockito::Matcher::Regex("UNWIND \\$hosts AS host MERGE".to_string()),
             mockito::Matcher::Regex("UNWIND \\$containers AS container MERGE".to_string()),
             mockito::Matcher::Regex("UNWIND \\$processes AS process MERGE".to_string()),
+            mockito::Matcher::Regex("UNWIND \\$routes AS route MERGE".to_string()),
+            mockito::Matcher::Regex("UNWIND \\$endpoints AS endpoint MERGE".to_string()),
         ]))
         .with_status(200)
         .with_body(r#"{"errors": []}"#)
@@ -413,6 +442,24 @@ async fn test_write_graph_to_neo4j_success() {
                     }
                 ],
                 "processes": []
+            }
+        ],
+        "routes": [
+            {
+                "kind": "k8s_service",
+                "source_kind": "service",
+                "source_name": "web",
+                "source_namespace": "default",
+                "target_kind": "service",
+                "target_name": "web",
+                "target_namespace": "default",
+                "host": "example.com",
+                "path": "/",
+                "path_type": "Prefix",
+                "protocol": "tcp",
+                "source_port": 443,
+                "target_port": "http",
+                "published_port": 443
             }
         ]
     }"#

@@ -117,7 +117,15 @@ impl IngestActivities {
                 rows.push(ClickHouseEventRow {
                     event_type: "Container".to_string(),
                     source: container.name.clone(),
-                    message: format!("Container running (image: {})", container.image),
+                    message: format!(
+                        "Container running (image: {}, image_sha256: {:?}, privileged: {:?}, run_as_root: {:?}, exposed_ports: {}, sensitive_volumes: {})",
+                        container.image,
+                        container.image_sha256,
+                        container.privileged,
+                        container.run_as_root,
+                        container.exposed_ports.len(),
+                        container.sensitive_volumes.len()
+                    ),
                     value: 1.0,
                     timestamp,
                 });
@@ -135,6 +143,25 @@ impl IngestActivities {
                     timestamp,
                 });
             }
+        }
+
+        for route in &payload.routes {
+            rows.push(ClickHouseEventRow {
+                event_type: "Route".to_string(),
+                source: route.source_name.clone(),
+                message: format!(
+                    "Route discovered (kind: {}, source_kind: {}, target_kind: {}, protocol: {}, source_port: {:?}, target_port: {:?}, published_port: {:?})",
+                    route.kind,
+                    route.source_kind,
+                    route.target_kind,
+                    route.protocol,
+                    route.source_port,
+                    route.target_port,
+                    route.published_port
+                ),
+                value: 1.0,
+                timestamp,
+            });
         }
 
         if !rows.is_empty() {
@@ -170,9 +197,13 @@ impl IngestActivities {
         let mut hosts = Vec::new();
         let mut containers = Vec::new();
         let mut processes = Vec::new();
+        let mut routes = Vec::new();
+        let mut route_endpoints = Vec::new();
         let mut host_containers = Vec::new();
         let mut host_processes = Vec::new();
         let mut container_processes = Vec::new();
+        let mut route_sources = Vec::new();
+        let mut route_targets = Vec::new();
 
         for host in &payload.hosts {
             hosts.push(json!({
@@ -201,6 +232,13 @@ impl IngestActivities {
                     "id": container.id,
                     "name": container.name,
                     "image": container.image,
+                    "imageSha256": container.image_sha256,
+                    "env": container.env,
+                    "ports": container.ports,
+                    "exposedPorts": container.exposed_ports,
+                    "privileged": container.privileged,
+                    "runAsRoot": container.run_as_root,
+                    "sensitiveVolumes": container.sensitive_volumes,
                 }));
                 host_containers.push(json!({
                     "hostId": host.id,
@@ -224,7 +262,76 @@ impl IngestActivities {
             }
         }
 
-        let node_count = hosts.len() + containers.len() + processes.len();
+        for route in &payload.routes {
+            let route_id = format!(
+                "{}:{}:{}:{}:{}:{}:{}",
+                route.kind,
+                route.source_kind,
+                route.source_name,
+                route.target_kind,
+                route.target_name,
+                route.protocol,
+                route
+                    .published_port
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "none".to_string())
+            );
+
+            routes.push(json!({
+                "id": route_id,
+                "kind": route.kind,
+                "sourceKind": route.source_kind,
+                "sourceName": route.source_name,
+                "sourceNamespace": route.source_namespace,
+                "targetKind": route.target_kind,
+                "targetName": route.target_name,
+                "targetNamespace": route.target_namespace,
+                "host": route.host,
+                "path": route.path,
+                "pathType": route.path_type,
+                "protocol": route.protocol,
+                "sourcePort": route.source_port,
+                "targetPort": route.target_port,
+                "publishedPort": route.published_port,
+            }));
+
+            let source_id = format!(
+                "{}:{}:{}",
+                route.source_kind,
+                route.source_namespace.clone().unwrap_or_default(),
+                route.source_name
+            );
+            let target_id = format!(
+                "{}:{}:{}",
+                route.target_kind,
+                route.target_namespace.clone().unwrap_or_default(),
+                route.target_name
+            );
+
+            route_endpoints.push(json!({
+                "id": source_id,
+                "kind": route.source_kind,
+                "name": route.source_name,
+                "namespace": route.source_namespace,
+            }));
+            route_endpoints.push(json!({
+                "id": target_id,
+                "kind": route.target_kind,
+                "name": route.target_name,
+                "namespace": route.target_namespace,
+            }));
+            route_sources.push(json!({
+                "routeId": route_id,
+                "endpointId": source_id,
+            }));
+            route_targets.push(json!({
+                "routeId": route_id,
+                "endpointId": target_id,
+            }));
+        }
+
+        let node_count =
+            hosts.len() + containers.len() + processes.len() + routes.len() + route_endpoints.len();
         let mut statements = Vec::new();
 
         if !hosts.is_empty() {
@@ -236,7 +343,7 @@ impl IngestActivities {
 
         if !containers.is_empty() {
             statements.push(Neo4jStatement {
-                statement: "UNWIND $containers AS container MERGE (c:Container {id: container.id}) SET c.name = container.name, c.image = container.image".to_string(),
+                statement: "UNWIND $containers AS container MERGE (c:Container {id: container.id}) SET c.name = container.name, c.image = container.image, c.imageSha256 = container.imageSha256, c.env = container.env, c.ports = container.ports, c.exposedPorts = container.exposedPorts, c.privileged = container.privileged, c.runAsRoot = container.runAsRoot, c.sensitiveVolumes = container.sensitiveVolumes".to_string(),
                 parameters: json!({ "containers": containers }),
             });
         }
@@ -266,6 +373,34 @@ impl IngestActivities {
             statements.push(Neo4jStatement {
                 statement: "UNWIND $relations AS relation MATCH (c:Container {id: relation.containerId}), (p:Process {id: relation.processId}) MERGE (c)-[:RUNS_PROCESS]->(p)".to_string(),
                 parameters: json!({ "relations": container_processes }),
+            });
+        }
+
+        if !routes.is_empty() {
+            statements.push(Neo4jStatement {
+                statement: "UNWIND $routes AS route MERGE (r:Route {id: route.id}) SET r.kind = route.kind, r.sourceKind = route.sourceKind, r.sourceName = route.sourceName, r.sourceNamespace = route.sourceNamespace, r.targetKind = route.targetKind, r.targetName = route.targetName, r.targetNamespace = route.targetNamespace, r.host = route.host, r.path = route.path, r.pathType = route.pathType, r.protocol = route.protocol, r.sourcePort = route.sourcePort, r.targetPort = route.targetPort, r.publishedPort = route.publishedPort".to_string(),
+                parameters: json!({ "routes": routes }),
+            });
+        }
+
+        if !route_endpoints.is_empty() {
+            statements.push(Neo4jStatement {
+                statement: "UNWIND $endpoints AS endpoint MERGE (e:RouteEndpoint {id: endpoint.id}) SET e.kind = endpoint.kind, e.name = endpoint.name, e.namespace = endpoint.namespace".to_string(),
+                parameters: json!({ "endpoints": route_endpoints }),
+            });
+        }
+
+        if !route_sources.is_empty() {
+            statements.push(Neo4jStatement {
+                statement: "UNWIND $relations AS relation MATCH (r:Route {id: relation.routeId}), (e:RouteEndpoint {id: relation.endpointId}) MERGE (r)-[:ROUTE_FROM]->(e)".to_string(),
+                parameters: json!({ "relations": route_sources }),
+            });
+        }
+
+        if !route_targets.is_empty() {
+            statements.push(Neo4jStatement {
+                statement: "UNWIND $relations AS relation MATCH (r:Route {id: relation.routeId}), (e:RouteEndpoint {id: relation.endpointId}) MERGE (r)-[:ROUTE_TO]->(e)".to_string(),
+                parameters: json!({ "relations": route_targets }),
             });
         }
 

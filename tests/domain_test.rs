@@ -401,6 +401,7 @@ async fn test_write_graph_to_neo4j_success() {
         .match_body(mockito::Matcher::AllOf(vec![
             mockito::Matcher::Regex("UNWIND \\$hosts AS host MERGE".to_string()),
             mockito::Matcher::Regex("UNWIND \\$containers AS container MERGE".to_string()),
+            mockito::Matcher::Regex("\"env\":\\[\\]".to_string()),
             mockito::Matcher::Regex("UNWIND \\$processes AS process MERGE".to_string()),
             mockito::Matcher::Regex("UNWIND \\$routes AS route MERGE".to_string()),
             mockito::Matcher::Regex("UNWIND \\$endpoints AS endpoint MERGE".to_string()),

@@ -265,7 +265,7 @@ impl IngestActivities {
                     "name": container.name,
                     "image": container.image,
                     "imageSha256": container.image_sha256,
-                    "env": container.env,
+                    "env": env_pairs(&container.env),
                     "ports": container.ports,
                     "exposedPorts": container.exposed_ports,
                     "privileged": container.privileged,
@@ -504,4 +504,10 @@ impl IngestActivities {
 
 fn scoped_topology_id(company_id: &str, agent_id: &str, raw_id: &str) -> String {
     format!("{}:{}:{}", company_id, agent_id, raw_id)
+}
+
+fn env_pairs(env: &std::collections::BTreeMap<String, String>) -> Vec<String> {
+    env.iter()
+        .map(|(key, value)| format!("{}={}", key, value))
+        .collect()
 }

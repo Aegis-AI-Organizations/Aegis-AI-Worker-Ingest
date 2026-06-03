@@ -54,8 +54,11 @@ impl IngestActivities {
         self: Arc<Self>,
         _ctx: ActivityContext,
         payload_json: String,
+        agent_id: String,
+        company_id: String,
     ) -> Result<(), ActivityError> {
-        self.write_telemetry_to_clickhouse_impl(payload_json).await
+        self.write_telemetry_to_clickhouse_impl(payload_json, agent_id, company_id)
+            .await
     }
 
     #[activity]
@@ -63,8 +66,11 @@ impl IngestActivities {
         self: Arc<Self>,
         _ctx: ActivityContext,
         payload_json: String,
+        agent_id: String,
+        company_id: String,
     ) -> Result<(), ActivityError> {
-        self.write_graph_to_neo4j_impl(payload_json).await
+        self.write_graph_to_neo4j_impl(payload_json, agent_id, company_id)
+            .await
     }
 }
 
@@ -93,6 +99,8 @@ impl IngestActivities {
     pub async fn write_telemetry_to_clickhouse_impl(
         &self,
         payload_json: String,
+        agent_id: String,
+        company_id: String,
     ) -> Result<(), ActivityError> {
         let payload: NetworkTopologyPayload = serde_json::from_str(&payload_json)
             .map_err(|e| anyhow::anyhow!("Failed to parse topology JSON: {}", e))?;
@@ -106,6 +114,8 @@ impl IngestActivities {
 
         for host in &payload.hosts {
             rows.push(ClickHouseEventRow {
+                agent_id: agent_id.clone(),
+                company_id: company_id.clone(),
                 event_type: "Host".to_string(),
                 source: host.hostname.clone(),
                 message: format!("Host online (ip_addresses: {:?})", host.ip_addresses),
@@ -115,6 +125,8 @@ impl IngestActivities {
 
             for container in &host.containers {
                 rows.push(ClickHouseEventRow {
+                    agent_id: agent_id.clone(),
+                    company_id: company_id.clone(),
                     event_type: "Container".to_string(),
                     source: container.name.clone(),
                     message: format!(
@@ -133,6 +145,8 @@ impl IngestActivities {
 
             for process in &host.processes {
                 rows.push(ClickHouseEventRow {
+                    agent_id: agent_id.clone(),
+                    company_id: company_id.clone(),
                     event_type: "Process".to_string(),
                     source: process.name.clone(),
                     message: format!(
@@ -147,6 +161,8 @@ impl IngestActivities {
 
         for route in &payload.routes {
             rows.push(ClickHouseEventRow {
+                agent_id: agent_id.clone(),
+                company_id: company_id.clone(),
                 event_type: "Route".to_string(),
                 source: route.source_name.clone(),
                 message: format!(
@@ -189,6 +205,8 @@ impl IngestActivities {
     pub async fn write_graph_to_neo4j_impl(
         &self,
         payload_json: String,
+        agent_id: String,
+        company_id: String,
     ) -> Result<(), ActivityError> {
         let payload: NetworkTopologyPayload = serde_json::from_str(&payload_json)
             .map_err(|e| anyhow::anyhow!("Failed to parse topology JSON: {}", e))?;
@@ -206,30 +224,44 @@ impl IngestActivities {
         let mut route_targets = Vec::new();
 
         for host in &payload.hosts {
+            let host_id = scoped_topology_id(&company_id, &agent_id, &host.id);
             hosts.push(json!({
-                "id": host.id,
+                "id": host_id,
+                "rawId": host.id,
+                "agentId": agent_id.clone(),
+                "companyId": company_id.clone(),
                 "hostname": host.hostname,
                 "ipAddresses": host.ip_addresses,
             }));
 
             for process in &host.processes {
-                let process_id = format!("{}-proc-{}", host.id, process.pid);
+                let process_id = scoped_topology_id(
+                    &company_id,
+                    &agent_id,
+                    &format!("{}-proc-{}", host.id, process.pid),
+                );
                 processes.push(json!({
                     "id": process_id,
+                    "agentId": agent_id.clone(),
+                    "companyId": company_id.clone(),
                     "pid": process.pid,
                     "name": process.name,
                     "commandLine": process.command_line,
                     "user": process.user,
                 }));
                 host_processes.push(json!({
-                    "hostId": host.id,
+                    "hostId": host_id,
                     "processId": process_id,
                 }));
             }
 
             for container in &host.containers {
+                let container_id = scoped_topology_id(&company_id, &agent_id, &container.id);
                 containers.push(json!({
-                    "id": container.id,
+                    "id": container_id,
+                    "rawId": container.id,
+                    "agentId": agent_id.clone(),
+                    "companyId": company_id.clone(),
                     "name": container.name,
                     "image": container.image,
                     "imageSha256": container.image_sha256,
@@ -241,21 +273,27 @@ impl IngestActivities {
                     "sensitiveVolumes": container.sensitive_volumes,
                 }));
                 host_containers.push(json!({
-                    "hostId": host.id,
-                    "containerId": container.id,
+                    "hostId": host_id,
+                    "containerId": container_id,
                 }));
 
                 for process in &container.processes {
-                    let process_id = format!("{}-proc-{}", container.id, process.pid);
+                    let process_id = scoped_topology_id(
+                        &company_id,
+                        &agent_id,
+                        &format!("{}-proc-{}", container.id, process.pid),
+                    );
                     processes.push(json!({
                         "id": process_id,
+                        "agentId": agent_id.clone(),
+                        "companyId": company_id.clone(),
                         "pid": process.pid,
                         "name": process.name,
                         "commandLine": process.command_line,
                         "user": process.user,
                     }));
                     container_processes.push(json!({
-                        "containerId": container.id,
+                        "containerId": container_id,
                         "processId": process_id,
                     }));
                 }
@@ -263,7 +301,7 @@ impl IngestActivities {
         }
 
         for route in &payload.routes {
-            let route_id = format!(
+            let route_raw_id = format!(
                 "{}:{}:{}:{}:{}:{}:{}",
                 route.kind,
                 route.source_kind,
@@ -276,9 +314,13 @@ impl IngestActivities {
                     .map(|value| value.to_string())
                     .unwrap_or_else(|| "none".to_string())
             );
+            let route_id = scoped_topology_id(&company_id, &agent_id, &route_raw_id);
 
             routes.push(json!({
                 "id": route_id,
+                "rawId": route_raw_id,
+                "agentId": agent_id.clone(),
+                "companyId": company_id.clone(),
                 "kind": route.kind,
                 "sourceKind": route.source_kind,
                 "sourceName": route.source_name,
@@ -295,27 +337,35 @@ impl IngestActivities {
                 "publishedPort": route.published_port,
             }));
 
-            let source_id = format!(
+            let source_raw_id = format!(
                 "{}:{}:{}",
                 route.source_kind,
                 route.source_namespace.clone().unwrap_or_default(),
                 route.source_name
             );
-            let target_id = format!(
+            let target_raw_id = format!(
                 "{}:{}:{}",
                 route.target_kind,
                 route.target_namespace.clone().unwrap_or_default(),
                 route.target_name
             );
+            let source_id = scoped_topology_id(&company_id, &agent_id, &source_raw_id);
+            let target_id = scoped_topology_id(&company_id, &agent_id, &target_raw_id);
 
             route_endpoints.push(json!({
                 "id": source_id,
+                "rawId": source_raw_id,
+                "agentId": agent_id.clone(),
+                "companyId": company_id.clone(),
                 "kind": route.source_kind,
                 "name": route.source_name,
                 "namespace": route.source_namespace,
             }));
             route_endpoints.push(json!({
                 "id": target_id,
+                "rawId": target_raw_id,
+                "agentId": agent_id.clone(),
+                "companyId": company_id.clone(),
                 "kind": route.target_kind,
                 "name": route.target_name,
                 "namespace": route.target_namespace,
@@ -336,21 +386,21 @@ impl IngestActivities {
 
         if !hosts.is_empty() {
             statements.push(Neo4jStatement {
-                statement: "UNWIND $hosts AS host MERGE (h:Host {id: host.id}) SET h.hostname = host.hostname, h.ipAddresses = host.ipAddresses".to_string(),
+                statement: "UNWIND $hosts AS host MERGE (h:Host {id: host.id}) SET h.rawId = host.rawId, h.agentId = host.agentId, h.companyId = host.companyId, h.hostname = host.hostname, h.ipAddresses = host.ipAddresses".to_string(),
                 parameters: json!({ "hosts": hosts }),
             });
         }
 
         if !containers.is_empty() {
             statements.push(Neo4jStatement {
-                statement: "UNWIND $containers AS container MERGE (c:Container {id: container.id}) SET c.name = container.name, c.image = container.image, c.imageSha256 = container.imageSha256, c.env = container.env, c.ports = container.ports, c.exposedPorts = container.exposedPorts, c.privileged = container.privileged, c.runAsRoot = container.runAsRoot, c.sensitiveVolumes = container.sensitiveVolumes".to_string(),
+                statement: "UNWIND $containers AS container MERGE (c:Container {id: container.id}) SET c.rawId = container.rawId, c.agentId = container.agentId, c.companyId = container.companyId, c.name = container.name, c.image = container.image, c.imageSha256 = container.imageSha256, c.env = container.env, c.ports = container.ports, c.exposedPorts = container.exposedPorts, c.privileged = container.privileged, c.runAsRoot = container.runAsRoot, c.sensitiveVolumes = container.sensitiveVolumes".to_string(),
                 parameters: json!({ "containers": containers }),
             });
         }
 
         if !processes.is_empty() {
             statements.push(Neo4jStatement {
-                statement: "UNWIND $processes AS process MERGE (p:Process {id: process.id}) SET p.name = process.name, p.commandLine = process.commandLine, p.user = process.user, p.pid = process.pid".to_string(),
+                statement: "UNWIND $processes AS process MERGE (p:Process {id: process.id}) SET p.agentId = process.agentId, p.companyId = process.companyId, p.name = process.name, p.commandLine = process.commandLine, p.user = process.user, p.pid = process.pid".to_string(),
                 parameters: json!({ "processes": processes }),
             });
         }
@@ -378,14 +428,14 @@ impl IngestActivities {
 
         if !routes.is_empty() {
             statements.push(Neo4jStatement {
-                statement: "UNWIND $routes AS route MERGE (r:Route {id: route.id}) SET r.kind = route.kind, r.sourceKind = route.sourceKind, r.sourceName = route.sourceName, r.sourceNamespace = route.sourceNamespace, r.targetKind = route.targetKind, r.targetName = route.targetName, r.targetNamespace = route.targetNamespace, r.host = route.host, r.path = route.path, r.pathType = route.pathType, r.protocol = route.protocol, r.sourcePort = route.sourcePort, r.targetPort = route.targetPort, r.publishedPort = route.publishedPort".to_string(),
+                statement: "UNWIND $routes AS route MERGE (r:Route {id: route.id}) SET r.rawId = route.rawId, r.agentId = route.agentId, r.companyId = route.companyId, r.kind = route.kind, r.sourceKind = route.sourceKind, r.sourceName = route.sourceName, r.sourceNamespace = route.sourceNamespace, r.targetKind = route.targetKind, r.targetName = route.targetName, r.targetNamespace = route.targetNamespace, r.host = route.host, r.path = route.path, r.pathType = route.pathType, r.protocol = route.protocol, r.sourcePort = route.sourcePort, r.targetPort = route.targetPort, r.publishedPort = route.publishedPort".to_string(),
                 parameters: json!({ "routes": routes }),
             });
         }
 
         if !route_endpoints.is_empty() {
             statements.push(Neo4jStatement {
-                statement: "UNWIND $endpoints AS endpoint MERGE (e:RouteEndpoint {id: endpoint.id}) SET e.kind = endpoint.kind, e.name = endpoint.name, e.namespace = endpoint.namespace".to_string(),
+                statement: "UNWIND $endpoints AS endpoint MERGE (e:RouteEndpoint {id: endpoint.id}) SET e.rawId = endpoint.rawId, e.agentId = endpoint.agentId, e.companyId = endpoint.companyId, e.kind = endpoint.kind, e.name = endpoint.name, e.namespace = endpoint.namespace".to_string(),
                 parameters: json!({ "endpoints": route_endpoints }),
             });
         }
@@ -450,4 +500,8 @@ impl IngestActivities {
 
         Ok(())
     }
+}
+
+fn scoped_topology_id(company_id: &str, agent_id: &str, raw_id: &str) -> String {
+    format!("{}:{}:{}", company_id, agent_id, raw_id)
 }

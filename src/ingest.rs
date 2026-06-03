@@ -50,6 +50,8 @@ pub struct BatchedEvent {
 
 #[derive(clickhouse::Row, serde::Serialize)]
 pub struct ClickHouseEventRow {
+    pub agent_id: String,
+    pub company_id: String,
     pub event_type: String,
     pub source: String,
     pub message: String,
@@ -108,6 +110,8 @@ pub async fn flush_batch(batch: &mut Vec<BatchedEvent>, client: &clickhouse::Cli
                 }
             };
             ClickHouseEventRow {
+                agent_id: "".to_string(),
+                company_id: "".to_string(),
                 event_type,
                 source,
                 message,
@@ -518,11 +522,10 @@ mod tests {
         });
         tx.send(envelope).await.unwrap();
         // Since ClickHouseEventProcessor::default() sender is None, it should return Ok(()) immediately
-        let res = timeout(Duration::from_millis(100), ack_rx)
+        timeout(Duration::from_millis(100), ack_rx)
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(res, ());
         loop_handle.abort();
     }
 

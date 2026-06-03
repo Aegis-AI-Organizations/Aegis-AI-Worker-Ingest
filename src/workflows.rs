@@ -10,6 +10,10 @@ use serde::{Deserialize, Serialize};
 pub struct IngestArgs {
     pub bucket: String,
     pub key: String,
+    #[serde(default)]
+    pub agent_id: String,
+    #[serde(default)]
+    pub company_id: String,
 }
 
 #[workflow]
@@ -17,6 +21,8 @@ pub struct IngestArgs {
 pub struct IngestTopologyWorkflow {
     bucket: String,
     key: String,
+    agent_id: String,
+    company_id: String,
 }
 
 #[workflow_methods]
@@ -26,12 +32,21 @@ impl IngestTopologyWorkflow {
         Self {
             bucket: args.bucket,
             key: args.key,
+            agent_id: args.agent_id,
+            company_id: args.company_id,
         }
     }
 
     #[run]
     pub async fn run(ctx: &mut WorkflowContext<Self>) -> WorkflowResult<String> {
-        let (bucket, key) = ctx.state(|s| (s.bucket.clone(), s.key.clone()));
+        let (bucket, key, agent_id, company_id) = ctx.state(|s| {
+            (
+                s.bucket.clone(),
+                s.key.clone(),
+                s.agent_id.clone(),
+                s.company_id.clone(),
+            )
+        });
         // Step 1: Download topology file from MinIO
         let download_opts = ActivityOptions::start_to_close_timeout(Duration::from_secs(60));
         let payload_json: String = ctx
@@ -46,7 +61,7 @@ impl IngestTopologyWorkflow {
         let clickhouse_opts = ActivityOptions::start_to_close_timeout(Duration::from_secs(30));
         ctx.start_activity(
             IngestActivities::write_telemetry_to_clickhouse,
-            payload_json.clone(),
+            (payload_json.clone(), agent_id.clone(), company_id.clone()),
             clickhouse_opts,
         )
         .await?;
@@ -55,7 +70,7 @@ impl IngestTopologyWorkflow {
         let neo4j_opts = ActivityOptions::start_to_close_timeout(Duration::from_secs(60));
         ctx.start_activity(
             IngestActivities::write_graph_to_neo4j,
-            payload_json,
+            (payload_json, agent_id, company_id),
             neo4j_opts,
         )
         .await?;

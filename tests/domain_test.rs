@@ -347,7 +347,11 @@ async fn test_write_telemetry_to_clickhouse_success() {
     .to_string();
 
     let res = activities
-        .write_telemetry_to_clickhouse_impl(payload_json)
+        .write_telemetry_to_clickhouse_impl(
+            payload_json,
+            "agent-1".to_string(),
+            "company-1".to_string(),
+        )
         .await;
 
     assert!(res.is_ok());
@@ -376,7 +380,11 @@ async fn test_write_telemetry_to_clickhouse_invalid_json() {
     });
 
     let res = activities
-        .write_telemetry_to_clickhouse_impl("invalid json".to_string())
+        .write_telemetry_to_clickhouse_impl(
+            "invalid json".to_string(),
+            "agent-1".to_string(),
+            "company-1".to_string(),
+        )
         .await;
 
     assert!(res.is_err());
@@ -465,7 +473,9 @@ async fn test_write_graph_to_neo4j_success() {
     }"#
     .to_string();
 
-    let res = activities.write_graph_to_neo4j_impl(payload_json).await;
+    let res = activities
+        .write_graph_to_neo4j_impl(payload_json, "agent-1".to_string(), "company-1".to_string())
+        .await;
 
     assert!(res.is_ok());
 }
@@ -481,8 +491,8 @@ async fn test_write_graph_to_neo4j_batches_1000_hosts_in_one_transaction() {
         .mock("POST", "/db/neo4j/tx/commit")
         .match_body(mockito::Matcher::AllOf(vec![
             mockito::Matcher::Regex("UNWIND \\$hosts AS host MERGE".to_string()),
-            mockito::Matcher::Regex("\"id\":\"h0\"".to_string()),
-            mockito::Matcher::Regex("\"id\":\"h999\"".to_string()),
+            mockito::Matcher::Regex("\"id\":\"company-1:agent-1:h0\"".to_string()),
+            mockito::Matcher::Regex("\"id\":\"company-1:agent-1:h999\"".to_string()),
         ]))
         .with_status(200)
         .with_body(r#"{"errors": []}"#)
@@ -519,7 +529,11 @@ async fn test_write_graph_to_neo4j_batches_1000_hosts_in_one_transaction() {
         .collect::<Vec<_>>();
 
     let res = activities
-        .write_graph_to_neo4j_impl(json!({ "hosts": hosts }).to_string())
+        .write_graph_to_neo4j_impl(
+            json!({ "hosts": hosts }).to_string(),
+            "agent-1".to_string(),
+            "company-1".to_string(),
+        )
         .await;
 
     assert!(res.is_ok());
@@ -548,7 +562,11 @@ async fn test_write_graph_to_neo4j_invalid_json() {
     });
 
     let res = activities
-        .write_graph_to_neo4j_impl("invalid json".to_string())
+        .write_graph_to_neo4j_impl(
+            "invalid json".to_string(),
+            "agent-1".to_string(),
+            "company-1".to_string(),
+        )
         .await;
 
     assert!(res.is_err());
@@ -596,7 +614,9 @@ async fn test_write_graph_to_neo4j_http_error() {
     }"#
     .to_string();
 
-    let res = activities.write_graph_to_neo4j_impl(payload_json).await;
+    let res = activities
+        .write_graph_to_neo4j_impl(payload_json, "agent-1".to_string(), "company-1".to_string())
+        .await;
 
     assert!(res.is_err());
 }
@@ -644,7 +664,9 @@ async fn test_write_graph_to_neo4j_execution_error() {
     }"#
     .to_string();
 
-    let res = activities.write_graph_to_neo4j_impl(payload_json).await;
+    let res = activities
+        .write_graph_to_neo4j_impl(payload_json, "agent-1".to_string(), "company-1".to_string())
+        .await;
 
     assert!(res.is_err());
 }
@@ -660,7 +682,7 @@ async fn test_write_graph_to_neo4j_writes_host_process_relationships() {
         .match_body(mockito::Matcher::AllOf(vec![
             mockito::Matcher::Regex("MERGE \\(p:Process".to_string()),
             mockito::Matcher::Regex("RUNS_PROCESS".to_string()),
-            mockito::Matcher::Regex("\"processId\":\"h1-proc-456\"".to_string()),
+            mockito::Matcher::Regex("\"processId\":\"company-1:agent-1:h1-proc-456\"".to_string()),
         ]))
         .with_status(200)
         .with_body(r#"{"errors":[]}"#)
@@ -703,7 +725,9 @@ async fn test_write_graph_to_neo4j_writes_host_process_relationships() {
     }"#
     .to_string();
 
-    let res = activities.write_graph_to_neo4j_impl(payload_json).await;
+    let res = activities
+        .write_graph_to_neo4j_impl(payload_json, "agent-1".to_string(), "company-1".to_string())
+        .await;
 
     assert!(res.is_ok());
 }
@@ -752,7 +776,9 @@ async fn test_write_graph_to_neo4j_invalid_response_json() {
     }"#
     .to_string();
 
-    let res = activities.write_graph_to_neo4j_impl(payload_json).await;
+    let res = activities
+        .write_graph_to_neo4j_impl(payload_json, "agent-1".to_string(), "company-1".to_string())
+        .await;
 
     assert!(res.is_err());
 }
@@ -780,7 +806,11 @@ async fn test_write_graph_to_neo4j_empty_topology_is_a_no_op() {
     });
 
     let res = activities
-        .write_graph_to_neo4j_impl(r#"{"hosts":[]}"#.to_string())
+        .write_graph_to_neo4j_impl(
+            r#"{"hosts":[]}"#.to_string(),
+            "agent-1".to_string(),
+            "company-1".to_string(),
+        )
         .await;
 
     assert!(res.is_ok());

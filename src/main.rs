@@ -172,19 +172,28 @@ fn build_temporal_tls_options() -> anyhow::Result<TlsOptions> {
 async fn init_clickhouse(client: &clickhouse::Client) -> anyhow::Result<()> {
     let ddl = "
         CREATE TABLE IF NOT EXISTS system_events (
+            agent_id String,
+            company_id String,
             event_type String,
             source String,
             message String,
             value Float64,
             timestamp DateTime
         ) ENGINE = MergeTree()
-        ORDER BY (event_type, timestamp, source)
+        ORDER BY (company_id, agent_id, event_type, timestamp, source)
     ";
+    let migrations = [
+        "ALTER TABLE system_events ADD COLUMN IF NOT EXISTS agent_id String",
+        "ALTER TABLE system_events ADD COLUMN IF NOT EXISTS company_id String",
+    ];
 
     let mut retries = 5;
     while retries > 0 {
         match client.query(ddl).execute().await {
             Ok(_) => {
+                for migration in migrations {
+                    client.query(migration).execute().await?;
+                }
                 println!("Successfully initialized ClickHouse system_events table.");
                 return Ok(());
             }

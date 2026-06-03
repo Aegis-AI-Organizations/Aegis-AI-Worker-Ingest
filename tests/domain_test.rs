@@ -402,6 +402,12 @@ async fn test_write_graph_to_neo4j_success() {
             mockito::Matcher::Regex("UNWIND \\$hosts AS host MERGE".to_string()),
             mockito::Matcher::Regex("UNWIND \\$containers AS container MERGE".to_string()),
             mockito::Matcher::Regex("\"env\":\\[\\]".to_string()),
+            mockito::Matcher::Regex(
+                "\"ports\":\\[\"80:tcp:LISTEN:::k8s_container\"\\]".to_string(),
+            ),
+            mockito::Matcher::Regex(
+                "\"exposedPorts\":\\[\"80:tcp:LISTEN:::k8s_container\"\\]".to_string(),
+            ),
             mockito::Matcher::Regex("UNWIND \\$processes AS process MERGE".to_string()),
             mockito::Matcher::Regex("UNWIND \\$routes AS route MERGE".to_string()),
             mockito::Matcher::Regex("UNWIND \\$endpoints AS endpoint MERGE".to_string()),
@@ -447,7 +453,22 @@ async fn test_write_graph_to_neo4j_success() {
                                 "user": "usr2"
                             }
                         ],
-                        "ports": []
+                        "ports": [
+                            {
+                                "number": 80,
+                                "protocol": "tcp",
+                                "state": "LISTEN",
+                                "source": "k8s_container"
+                            }
+                        ],
+                        "exposedPorts": [
+                            {
+                                "number": 80,
+                                "protocol": "tcp",
+                                "state": "LISTEN",
+                                "source": "k8s_container"
+                            }
+                        ]
                     }
                 ],
                 "processes": []

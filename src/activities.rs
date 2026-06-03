@@ -266,8 +266,8 @@ impl IngestActivities {
                     "image": container.image,
                     "imageSha256": container.image_sha256,
                     "env": env_pairs(&container.env),
-                    "ports": container.ports,
-                    "exposedPorts": container.exposed_ports,
+                    "ports": port_descriptions(&container.ports),
+                    "exposedPorts": port_descriptions(&container.exposed_ports),
                     "privileged": container.privileged,
                     "runAsRoot": container.run_as_root,
                     "sensitiveVolumes": container.sensitive_volumes,
@@ -509,5 +509,24 @@ fn scoped_topology_id(company_id: &str, agent_id: &str, raw_id: &str) -> String 
 fn env_pairs(env: &std::collections::BTreeMap<String, String>) -> Vec<String> {
     env.iter()
         .map(|(key, value)| format!("{}={}", key, value))
+        .collect()
+}
+
+fn port_descriptions(ports: &[crate::domain::ProtoPort]) -> Vec<String> {
+    ports
+        .iter()
+        .map(|port| {
+            format!(
+                "{}:{}:{}:{}:{}:{}",
+                port.number,
+                port.protocol,
+                port.state.as_deref().unwrap_or(""),
+                port.host_ip.as_deref().unwrap_or(""),
+                port.host_port
+                    .map(|value| value.to_string())
+                    .unwrap_or_default(),
+                port.source.as_deref().unwrap_or("")
+            )
+        })
         .collect()
 }

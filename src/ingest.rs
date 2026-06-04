@@ -93,6 +93,7 @@ pub async fn flush_batch(batch: &mut Vec<BatchedEvent>, client: &clickhouse::Cli
         return;
     }
 
+    println!("Flushing {} batched event(s) to ClickHouse...", batch.len());
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -133,6 +134,10 @@ pub async fn flush_batch(batch: &mut Vec<BatchedEvent>, client: &clickhouse::Cli
 
     match result {
         Ok(()) => {
+            println!(
+                "ClickHouse batch flush succeeded for {} event(s)",
+                batch.len()
+            );
             for item in batch.drain(..) {
                 let _ = item.ack.send(Ok(()));
             }
@@ -158,18 +163,24 @@ pub async fn run_batching_loop(
     // Skip the first tick
     interval.tick().await;
 
+    println!("ClickHouse batching loop started (flush interval=1s, threshold=1000)");
+
     loop {
         tokio::select! {
             maybe_event = receiver.recv() => {
                 match maybe_event {
                     Some(event) => {
                         batch.push(event);
+                        println!("Queued ingest event for ClickHouse batching (batch_size={})", batch.len());
                         if batch.len() >= 1000 {
+                            println!("Batch size threshold reached, flushing now");
                             flush_batch(&mut batch, &client).await;
                         }
                     }
                     None => {
+                        println!("ClickHouse batching loop input channel closed");
                         if !batch.is_empty() {
+                            println!("Draining remaining batched events before shutdown");
                             flush_batch(&mut batch, &client).await;
                         }
                         break;
@@ -178,11 +189,13 @@ pub async fn run_batching_loop(
             }
             _ = interval.tick() => {
                 if !batch.is_empty() {
+                    println!("Batch interval elapsed, flushing {} event(s)", batch.len());
                     flush_batch(&mut batch, &client).await;
                 }
             }
         }
     }
+    println!("ClickHouse batching loop stopped");
 }
 
 pub fn spawn_ingest_loop<P>(
@@ -193,16 +206,22 @@ where
     P: EventProcessor,
 {
     tokio::spawn(async move {
+        println!("Ingest event loop started");
         while let Some(envelope) = receiver.recv().await {
             let processor = Arc::clone(&processor);
 
             tokio::spawn(async move {
                 let event = envelope.event.clone();
+                println!("Processing ingest event: {:?}", event);
                 if processor.process(event).await.is_ok() {
+                    println!("Ingest event processed successfully");
                     envelope.ack();
+                } else {
+                    println!("Ingest event processing failed");
                 }
             });
         }
+        println!("Ingest event loop stopped");
     })
 }
 

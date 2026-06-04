@@ -30,6 +30,10 @@ async fn run() {
     let clickhouse_db = std::env::var("CLICKHOUSE_DB").unwrap_or_else(|_| "default".to_string());
 
     let clickhouse_url = format!("http://{}:{}", clickhouse_host, clickhouse_port);
+    println!(
+        "Configuring ClickHouse client for {}:{} database {}",
+        clickhouse_host, clickhouse_port, clickhouse_db
+    );
     let clickhouse_client = clickhouse::Client::default()
         .with_url(clickhouse_url)
         .with_user(clickhouse_user)
@@ -37,6 +41,7 @@ async fn run() {
         .with_database(clickhouse_db);
 
     // Initialize clickhouse table
+    println!("Ensuring ClickHouse system_events table exists...");
     if let Err(e) = init_clickhouse(&clickhouse_client).await {
         eprintln!("Critical: ClickHouse initialization failed: {}", e);
     }
@@ -62,6 +67,10 @@ async fn run() {
         Url::parse(&temp_url_str).unwrap_or_else(|_| Url::parse("http://localhost:7233").unwrap());
 
     println!("Connecting to Temporal at {}...", temp_url_str);
+    println!(
+        "Temporal config namespace={}, queue={}",
+        temporal_namespace, "INGEST_TASK_QUEUE"
+    );
 
     // We create the runtime
     let runtime_options = RuntimeOptions::builder().build().unwrap();
@@ -138,6 +147,7 @@ async fn run() {
         })
         .build();
 
+    println!("Registering Temporal worker activities and workflow for INGEST_TASK_QUEUE");
     let mut worker = Worker::new(&runtime, temporal_client, worker_options).unwrap();
     println!("Temporal Worker started on queue INGEST_TASK_QUEUE");
     if let Err(e) = worker.run().await {
@@ -188,19 +198,26 @@ async fn init_clickhouse(client: &clickhouse::Client) -> anyhow::Result<()> {
     ];
 
     let mut retries = 5;
+    let mut attempt = 1;
     while retries > 0 {
+        println!("ClickHouse init attempt {}...", attempt);
         match client.query(ddl).execute().await {
             Ok(_) => {
                 for migration in migrations {
+                    println!("Applying ClickHouse migration: {}", migration);
                     client.query(migration).execute().await?;
                 }
                 println!("Successfully initialized ClickHouse system_events table.");
                 return Ok(());
             }
             Err(e) => {
-                eprintln!("Failed to initialize ClickHouse: {}. Retrying in 2s...", e);
+                eprintln!(
+                    "Failed to initialize ClickHouse on attempt {}: {}. Retrying in 2s...",
+                    attempt, e
+                );
                 tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                 retries -= 1;
+                attempt += 1;
             }
         }
     }

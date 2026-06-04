@@ -68,8 +68,8 @@ async fn run() {
 
     println!("Connecting to Temporal at {}...", temp_url_str);
     println!(
-        "Temporal config namespace={}, queue={}",
-        temporal_namespace, "INGEST_TASK_QUEUE"
+        "Temporal config namespace={}, queue=INGEST_TASK_QUEUE",
+        temporal_namespace
     );
 
     // We create the runtime

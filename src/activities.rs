@@ -220,6 +220,9 @@ impl IngestActivities {
         let mut host_containers = Vec::new();
         let mut host_processes = Vec::new();
         let mut container_processes = Vec::new();
+        let mut container_networks = Vec::new();
+        let mut container_env_refs = Vec::new();
+        let mut container_name_to_id = std::collections::BTreeMap::new();
         let mut route_sources = Vec::new();
         let mut route_targets = Vec::new();
 
@@ -257,6 +260,8 @@ impl IngestActivities {
 
             for container in &host.containers {
                 let container_id = scoped_topology_id(&company_id, &agent_id, &container.id);
+                container_name_to_id
+                    .insert(container.name.to_ascii_lowercase(), container_id.clone());
                 containers.push(json!({
                     "id": container_id,
                     "rawId": container.id,
@@ -266,6 +271,8 @@ impl IngestActivities {
                     "image": container.image,
                     "imageSha256": container.image_sha256,
                     "env": env_pairs(&container.env),
+                    "labels": map_pairs(&container.labels),
+                    "networks": container.networks,
                     "ports": port_descriptions(&container.ports),
                     "exposedPorts": port_descriptions(&container.exposed_ports),
                     "privileged": container.privileged,
@@ -276,6 +283,21 @@ impl IngestActivities {
                     "hostId": host_id,
                     "containerId": container_id,
                 }));
+                for network in &container.networks {
+                    container_networks.push(json!({
+                        "containerId": container_id,
+                        "networkId": scoped_topology_id(&company_id, &agent_id, &format!("network:{}", network)),
+                        "network": network,
+                        "agentId": agent_id.clone(),
+                        "companyId": company_id.clone(),
+                    }));
+                }
+                for (key, value) in &container.env {
+                    if is_dependency_env_key(key) {
+                        container_env_refs
+                            .push((container_id.clone(), dependency_host_from_env(value)));
+                    }
+                }
 
                 for process in &container.processes {
                     let process_id = scoped_topology_id(
@@ -393,7 +415,7 @@ impl IngestActivities {
 
         if !containers.is_empty() {
             statements.push(Neo4jStatement {
-                statement: "UNWIND $containers AS container MERGE (c:Container {id: container.id}) SET c.rawId = container.rawId, c.agentId = container.agentId, c.companyId = container.companyId, c.name = container.name, c.image = container.image, c.imageSha256 = container.imageSha256, c.env = container.env, c.ports = container.ports, c.exposedPorts = container.exposedPorts, c.privileged = container.privileged, c.runAsRoot = container.runAsRoot, c.sensitiveVolumes = container.sensitiveVolumes".to_string(),
+                statement: "UNWIND $containers AS container MERGE (c:Container {id: container.id}) SET c.rawId = container.rawId, c.agentId = container.agentId, c.companyId = container.companyId, c.name = container.name, c.image = container.image, c.imageSha256 = container.imageSha256, c.env = container.env, c.labels = container.labels, c.networks = container.networks, c.ports = container.ports, c.exposedPorts = container.exposedPorts, c.privileged = container.privileged, c.runAsRoot = container.runAsRoot, c.sensitiveVolumes = container.sensitiveVolumes".to_string(),
                 parameters: json!({ "containers": containers }),
             });
         }
@@ -423,6 +445,29 @@ impl IngestActivities {
             statements.push(Neo4jStatement {
                 statement: "UNWIND $relations AS relation MATCH (c:Container {id: relation.containerId}), (p:Process {id: relation.processId}) MERGE (c)-[:RUNS_PROCESS]->(p)".to_string(),
                 parameters: json!({ "relations": container_processes }),
+            });
+        }
+        if !container_networks.is_empty() {
+            statements.push(Neo4jStatement {
+                statement: "UNWIND $relations AS relation MERGE (n:Network {id: relation.networkId}) SET n.name = relation.network, n.agentId = relation.agentId, n.companyId = relation.companyId WITH relation, n MATCH (c:Container {id: relation.containerId}) MERGE (c)-[:CONNECTED_TO]->(n)".to_string(),
+                parameters: json!({ "relations": container_networks }),
+            });
+        }
+        let container_dependencies = container_env_refs
+            .into_iter()
+            .filter_map(|(source_id, target_name)| {
+                container_name_to_id.get(&target_name).map(|target_id| {
+                    json!({
+                        "sourceId": source_id,
+                        "targetId": target_id,
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        if !container_dependencies.is_empty() {
+            statements.push(Neo4jStatement {
+                statement: "UNWIND $relations AS relation MATCH (source:Container {id: relation.sourceId}), (target:Container {id: relation.targetId}) MERGE (source)-[:DEPENDS_ON]->(target)".to_string(),
+                parameters: json!({ "relations": container_dependencies }),
             });
         }
 
@@ -510,6 +555,42 @@ fn env_pairs(env: &std::collections::BTreeMap<String, String>) -> Vec<String> {
     env.iter()
         .map(|(key, value)| format!("{}={}", key, value))
         .collect()
+}
+
+fn map_pairs(values: &std::collections::BTreeMap<String, String>) -> Vec<String> {
+    values
+        .iter()
+        .map(|(key, value)| format!("{}={}", key, value))
+        .collect()
+}
+
+fn is_dependency_env_key(key: &str) -> bool {
+    matches!(
+        key.to_ascii_uppercase().as_str(),
+        "DB_HOST"
+            | "DATABASE_HOST"
+            | "POSTGRES_HOST"
+            | "POSTGRESQL_HOST"
+            | "MYSQL_HOST"
+            | "MARIADB_HOST"
+            | "MONGO_HOST"
+            | "MONGODB_HOST"
+            | "REDIS_HOST"
+    )
+}
+
+fn dependency_host_from_env(value: &str) -> String {
+    let mut host = value.trim().to_ascii_lowercase();
+    if let Some((_, rest)) = host.split_once("://") {
+        host = rest.to_string();
+    }
+    if let Some((before_path, _)) = host.split_once('/') {
+        host = before_path.to_string();
+    }
+    if let Some((before_port, _)) = host.split_once(':') {
+        host = before_port.to_string();
+    }
+    host
 }
 
 fn port_descriptions(ports: &[crate::domain::ProtoPort]) -> Vec<String> {

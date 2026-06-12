@@ -108,6 +108,8 @@ fn test_topology_derived_traits() {
         image: "nginx:latest".to_string(),
         image_sha256: Some("sha256:test".to_string()),
         env: std::collections::BTreeMap::from([(String::from("FOO"), String::from("bar"))]),
+        labels: std::collections::BTreeMap::new(),
+        networks: Vec::new(),
         processes: vec![process.clone()],
         ports: vec![port.clone()],
         exposed_ports: vec![port.clone()],

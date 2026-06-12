@@ -68,6 +68,10 @@ pub struct ProtoContainer {
     #[serde(default)]
     pub env: BTreeMap<String, String>,
     #[serde(default)]
+    pub labels: BTreeMap<String, String>,
+    #[serde(default)]
+    pub networks: Vec<String>,
+    #[serde(default)]
     pub processes: Vec<ProtoProcess>,
     #[serde(default)]
     pub ports: Vec<ProtoPort>,

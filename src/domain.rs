@@ -38,6 +38,81 @@ pub struct NetworkTopologyPayload {
     pub hosts: Vec<ProtoHost>,
     #[serde(default)]
     pub routes: Vec<ProtoRoute>,
+    #[serde(default, alias = "databaseSchemas")]
+    pub database_schemas: Vec<DatabaseSchema>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseSchema {
+    #[serde(default)]
+    pub engine: String,
+    #[serde(default)]
+    pub host: Option<String>,
+    #[serde(default)]
+    pub port: Option<i32>,
+    #[serde(default, alias = "databaseName")]
+    pub database_name: Option<String>,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default, alias = "sourceContainerId")]
+    pub source_container_id: String,
+    #[serde(default, alias = "sourceContainerName")]
+    pub source_container_name: String,
+    #[serde(default)]
+    pub tables: Vec<DatabaseTable>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseTable {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub columns: Vec<DatabaseColumn>,
+    #[serde(default)]
+    pub indexes: Vec<DatabaseIndex>,
+    #[serde(default, alias = "foreignKeys")]
+    pub foreign_keys: Vec<DatabaseForeignKey>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseColumn {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default, alias = "dataType")]
+    pub data_type: String,
+    #[serde(default)]
+    pub nullable: bool,
+    #[serde(default, alias = "primaryKey")]
+    pub primary_key: bool,
+    #[serde(default, alias = "defaultValue")]
+    pub default_value: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseIndex {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub columns: Vec<String>,
+    #[serde(default)]
+    pub unique: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseForeignKey {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub columns: Vec<String>,
+    #[serde(default, alias = "referencedTable")]
+    pub referenced_table: String,
+    #[serde(default, alias = "referencedColumns")]
+    pub referenced_columns: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -217,6 +217,8 @@ impl IngestActivities {
         let mut processes = Vec::new();
         let mut routes = Vec::new();
         let mut route_endpoints = Vec::new();
+        let mut database_schemas = Vec::new();
+        let mut container_database_schemas = Vec::new();
         let mut host_containers = Vec::new();
         let mut host_processes = Vec::new();
         let mut container_processes = Vec::new();
@@ -402,8 +404,57 @@ impl IngestActivities {
             }));
         }
 
-        let node_count =
-            hosts.len() + containers.len() + processes.len() + routes.len() + route_endpoints.len();
+        for schema in &payload.database_schemas {
+            let schema_raw_id = format!(
+                "database:{}:{}:{}:{}",
+                schema.engine,
+                schema.host.clone().unwrap_or_default(),
+                schema
+                    .port
+                    .map(|value| value.to_string())
+                    .unwrap_or_default(),
+                schema.database_name.clone().unwrap_or_default()
+            );
+            let schema_id = scoped_topology_id(&company_id, &agent_id, &schema_raw_id);
+            let source_container_graph_id = if schema.source_container_id.is_empty() {
+                None
+            } else {
+                Some(scoped_topology_id(
+                    &company_id,
+                    &agent_id,
+                    &schema.source_container_id,
+                ))
+            };
+
+            database_schemas.push(json!({
+                "id": schema_id.clone(),
+                "rawId": schema_raw_id,
+                "agentId": agent_id.clone(),
+                "companyId": company_id.clone(),
+                "engine": schema.engine,
+                "host": schema.host,
+                "port": schema.port,
+                "databaseName": schema.database_name,
+                "username": schema.username,
+                "sourceContainerId": schema.source_container_id,
+                "sourceContainerName": schema.source_container_name,
+                "tableCount": schema.tables.len(),
+            }));
+
+            if let Some(container_id) = source_container_graph_id {
+                container_database_schemas.push(json!({
+                    "containerId": container_id,
+                    "schemaId": schema_id,
+                }));
+            }
+        }
+
+        let node_count = hosts.len()
+            + containers.len()
+            + processes.len()
+            + routes.len()
+            + route_endpoints.len()
+            + database_schemas.len();
         let mut statements = Vec::new();
 
         if !hosts.is_empty() {
@@ -496,6 +547,20 @@ impl IngestActivities {
             statements.push(Neo4jStatement {
                 statement: "UNWIND $relations AS relation MATCH (r:Route {id: relation.routeId}), (e:RouteEndpoint {id: relation.endpointId}) MERGE (r)-[:ROUTE_TO]->(e)".to_string(),
                 parameters: json!({ "relations": route_targets }),
+            });
+        }
+
+        if !database_schemas.is_empty() {
+            statements.push(Neo4jStatement {
+                statement: "UNWIND $databaseSchemas AS schema MERGE (d:DatabaseSchema {id: schema.id}) SET d.rawId = schema.rawId, d.agentId = schema.agentId, d.companyId = schema.companyId, d.engine = schema.engine, d.host = schema.host, d.port = schema.port, d.databaseName = schema.databaseName, d.username = schema.username, d.sourceContainerId = schema.sourceContainerId, d.sourceContainerName = schema.sourceContainerName, d.tableCount = schema.tableCount".to_string(),
+                parameters: json!({ "databaseSchemas": database_schemas }),
+            });
+        }
+
+        if !container_database_schemas.is_empty() {
+            statements.push(Neo4jStatement {
+                statement: "UNWIND $relations AS relation MATCH (c:Container {id: relation.containerId}), (d:DatabaseSchema {id: relation.schemaId}) MERGE (c)-[:USES_DATABASE]->(d)".to_string(),
+                parameters: json!({ "relations": container_database_schemas }),
             });
         }
 

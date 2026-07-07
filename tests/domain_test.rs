@@ -144,6 +144,7 @@ fn test_topology_derived_traits() {
             target_port: Some("http".to_string()),
             published_port: Some(443),
         }],
+        database_schemas: Vec::new(),
     };
 
     // Exercise Debug and Clone
@@ -608,6 +609,80 @@ async fn test_write_graph_to_neo4j_persists_container_metadata_relations() {
             "processes": []
         }],
         "routes": []
+    })
+    .to_string();
+
+    let res = activities
+        .write_graph_to_neo4j_impl(payload_json, "agent-1".to_string(), "company-1".to_string())
+        .await;
+
+    assert!(res.is_ok());
+}
+
+#[tokio::test]
+async fn test_write_graph_to_neo4j_persists_database_schema_relations() {
+    use aegis_ai_worker_ingest::activities::IngestActivities;
+    use serde_json::json;
+    use std::sync::Arc;
+
+    let mut server = mockito::Server::new_async().await;
+    let _m = server
+        .mock("POST", "/db/neo4j/tx/commit")
+        .match_body(mockito::Matcher::AllOf(vec![
+            mockito::Matcher::Regex("DatabaseSchema".to_string()),
+            mockito::Matcher::Regex("USES_DATABASE".to_string()),
+            mockito::Matcher::Regex("\"engine\":\"postgresql\"".to_string()),
+            mockito::Matcher::Regex("\"databaseName\":\"app_db\"".to_string()),
+            mockito::Matcher::Regex("\"containerId\":\"company-1:agent-1:api\"".to_string()),
+        ]))
+        .with_status(200)
+        .with_body(r#"{"errors": []}"#)
+        .create_async()
+        .await;
+
+    let s3_region = s3::region::Region::Custom {
+        region: "us-east-1".to_owned(),
+        endpoint: "http://127.0.0.1:9000".to_owned(),
+    };
+    let s3_credentials =
+        s3::creds::Credentials::new(Some("access"), Some("secret"), None, None, None).unwrap();
+    let minio_bucket = s3::Bucket::new("test-bucket", s3_region, s3_credentials)
+        .unwrap()
+        .with_path_style();
+
+    let activities = Arc::new(IngestActivities {
+        minio_bucket,
+        clickhouse_client: clickhouse::Client::default(),
+        neo4j_url: server.url(),
+        neo4j_auth: "Basic dGVzdDp0ZXN0".to_string(),
+    });
+
+    let payload_json = json!({
+        "hosts": [{
+            "id": "h1",
+            "hostname": "host1",
+            "ipAddresses": ["10.0.0.1"],
+            "containers": [{
+                "id": "api",
+                "name": "api",
+                "image": "api:latest",
+                "processes": [],
+                "ports": [],
+                "exposedPorts": []
+            }],
+            "processes": []
+        }],
+        "routes": [],
+        "databaseSchemas": [{
+            "engine": "postgresql",
+            "host": "postgres.default.svc",
+            "port": 5432,
+            "databaseName": "app_db",
+            "username": "app_user",
+            "sourceContainerId": "api",
+            "sourceContainerName": "api",
+            "tables": []
+        }]
     })
     .to_string();
 

@@ -144,6 +144,10 @@ pub struct ProtoContainer {
     pub image_hash: Option<String>,
     #[serde(default, alias = "imageSha256")]
     pub image_sha256: Option<String>,
+    #[serde(default, alias = "imageArchiveRef")]
+    pub image_archive_ref: Option<String>,
+    #[serde(default, alias = "imageArchiveObject")]
+    pub image_archive_object: Option<String>,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
     #[serde(default)]

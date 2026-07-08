@@ -276,6 +276,8 @@ impl IngestActivities {
                     "imageVersion": container.image_version,
                     "imageHash": container.image_hash,
                     "imageSha256": container.image_sha256,
+                    "imageArchiveRef": container.image_archive_ref,
+                    "imageArchiveObject": container.image_archive_object,
                     "env": env_pairs(&container.env),
                     "labels": map_pairs(&container.labels),
                     "networks": container.networks,
@@ -470,7 +472,7 @@ impl IngestActivities {
 
         if !containers.is_empty() {
             statements.push(Neo4jStatement {
-                statement: "UNWIND $containers AS container MERGE (c:Container {id: container.id}) SET c.rawId = container.rawId, c.agentId = container.agentId, c.companyId = container.companyId, c.name = container.name, c.image = container.image, c.imageVersion = container.imageVersion, c.imageHash = container.imageHash, c.imageSha256 = container.imageSha256, c.env = container.env, c.labels = container.labels, c.networks = container.networks, c.ports = container.ports, c.exposedPorts = container.exposedPorts, c.privileged = container.privileged, c.runAsRoot = container.runAsRoot, c.sensitiveVolumes = container.sensitiveVolumes".to_string(),
+                statement: "UNWIND $containers AS container MERGE (c:Container {id: container.id}) SET c.rawId = container.rawId, c.agentId = container.agentId, c.companyId = container.companyId, c.name = container.name, c.image = container.image, c.imageVersion = container.imageVersion, c.imageHash = container.imageHash, c.imageSha256 = container.imageSha256, c.imageArchiveRef = container.imageArchiveRef, c.imageArchiveObject = container.imageArchiveObject, c.env = container.env, c.labels = container.labels, c.networks = container.networks, c.ports = container.ports, c.exposedPorts = container.exposedPorts, c.privileged = container.privileged, c.runAsRoot = container.runAsRoot, c.sensitiveVolumes = container.sensitiveVolumes".to_string(),
                 parameters: json!({ "containers": containers }),
             });
         }

@@ -130,8 +130,10 @@ impl IngestActivities {
                     event_type: "Container".to_string(),
                     source: container.name.clone(),
                     message: format!(
-                        "Container running (image: {}, image_sha256: {:?}, privileged: {:?}, run_as_root: {:?}, exposed_ports: {}, sensitive_volumes: {})",
+                        "Container running (image: {}, image_version: {:?}, image_hash: {:?}, image_sha256: {:?}, privileged: {:?}, run_as_root: {:?}, exposed_ports: {}, sensitive_volumes: {})",
                         container.image,
+                        container.image_version,
+                        container.image_hash,
                         container.image_sha256,
                         container.privileged,
                         container.run_as_root,
@@ -271,6 +273,8 @@ impl IngestActivities {
                     "companyId": company_id.clone(),
                     "name": container.name,
                     "image": container.image,
+                    "imageVersion": container.image_version,
+                    "imageHash": container.image_hash,
                     "imageSha256": container.image_sha256,
                     "env": env_pairs(&container.env),
                     "labels": map_pairs(&container.labels),
@@ -466,7 +470,7 @@ impl IngestActivities {
 
         if !containers.is_empty() {
             statements.push(Neo4jStatement {
-                statement: "UNWIND $containers AS container MERGE (c:Container {id: container.id}) SET c.rawId = container.rawId, c.agentId = container.agentId, c.companyId = container.companyId, c.name = container.name, c.image = container.image, c.imageSha256 = container.imageSha256, c.env = container.env, c.labels = container.labels, c.networks = container.networks, c.ports = container.ports, c.exposedPorts = container.exposedPorts, c.privileged = container.privileged, c.runAsRoot = container.runAsRoot, c.sensitiveVolumes = container.sensitiveVolumes".to_string(),
+                statement: "UNWIND $containers AS container MERGE (c:Container {id: container.id}) SET c.rawId = container.rawId, c.agentId = container.agentId, c.companyId = container.companyId, c.name = container.name, c.image = container.image, c.imageVersion = container.imageVersion, c.imageHash = container.imageHash, c.imageSha256 = container.imageSha256, c.env = container.env, c.labels = container.labels, c.networks = container.networks, c.ports = container.ports, c.exposedPorts = container.exposedPorts, c.privileged = container.privileged, c.runAsRoot = container.runAsRoot, c.sensitiveVolumes = container.sensitiveVolumes".to_string(),
                 parameters: json!({ "containers": containers }),
             });
         }

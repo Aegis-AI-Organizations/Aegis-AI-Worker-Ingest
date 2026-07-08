@@ -138,6 +138,10 @@ pub struct ProtoContainer {
     pub name: String,
     #[serde(default)]
     pub image: String,
+    #[serde(default, alias = "imageVersion")]
+    pub image_version: Option<String>,
+    #[serde(default, alias = "imageHash")]
+    pub image_hash: Option<String>,
     #[serde(default, alias = "imageSha256")]
     pub image_sha256: Option<String>,
     #[serde(default)]

@@ -106,6 +106,8 @@ fn test_topology_derived_traits() {
         id: "c1".to_string(),
         name: "nginx-container".to_string(),
         image: "nginx:latest".to_string(),
+        image_version: Some("nginx:1.21.0-alpine".to_string()),
+        image_hash: Some("sha256:test".to_string()),
         image_sha256: Some("sha256:test".to_string()),
         env: std::collections::BTreeMap::from([(String::from("FOO"), String::from("bar"))]),
         labels: std::collections::BTreeMap::new(),

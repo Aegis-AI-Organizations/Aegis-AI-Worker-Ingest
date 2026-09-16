@@ -167,6 +167,177 @@ fn test_topology_derived_traits() {
     assert_eq!(deserialized.routes[0].kind, "k8s_service");
 }
 
+#[test]
+fn test_neo4j_topology_statements_preserve_deployer_fields() {
+    let payload = aegis_ai_worker_ingest::domain::NetworkTopologyPayload {
+        hosts: vec![aegis_ai_worker_ingest::domain::ProtoHost {
+            id: "host-1".to_string(),
+            hostname: "runner".to_string(),
+            ip_addresses: vec!["10.0.0.10".to_string()],
+            containers: vec![
+                aegis_ai_worker_ingest::domain::ProtoContainer {
+                    id: "container-web".to_string(),
+                    name: "portfolio-web".to_string(),
+                    image: "portfolio-web:local".to_string(),
+                    image_version: None,
+                    image_hash: None,
+                    image_sha256: None,
+                    image_archive_ref: Some("minio:archives/portfolio-web.tar".to_string()),
+                    image_archive_object: Some("archives/portfolio-web.tar".to_string()),
+                    env: std::collections::BTreeMap::from([(
+                        "DB_HOST".to_string(),
+                        "portfolio-db".to_string(),
+                    )]),
+                    labels: std::collections::BTreeMap::new(),
+                    networks: vec!["portfolio-net".to_string()],
+                    processes: vec![],
+                    ports: vec![aegis_ai_worker_ingest::domain::ProtoPort {
+                        number: 8080,
+                        protocol: "tcp".to_string(),
+                        state: Some("LISTEN".to_string()),
+                        host_ip: None,
+                        host_port: Some(18080),
+                        source: Some("docker".to_string()),
+                    }],
+                    exposed_ports: vec![aegis_ai_worker_ingest::domain::ProtoPort {
+                        number: 8080,
+                        protocol: "tcp".to_string(),
+                        state: None,
+                        host_ip: None,
+                        host_port: None,
+                        source: Some("dockerfile".to_string()),
+                    }],
+                    privileged: Some(false),
+                    run_as_root: Some(false),
+                    sensitive_volumes: vec![],
+                },
+                aegis_ai_worker_ingest::domain::ProtoContainer {
+                    id: "container-db".to_string(),
+                    name: "portfolio-db".to_string(),
+                    image: "postgres:16".to_string(),
+                    image_version: None,
+                    image_hash: None,
+                    image_sha256: None,
+                    image_archive_ref: None,
+                    image_archive_object: None,
+                    env: std::collections::BTreeMap::new(),
+                    labels: std::collections::BTreeMap::new(),
+                    networks: vec!["portfolio-net".to_string()],
+                    processes: vec![],
+                    ports: vec![],
+                    exposed_ports: vec![],
+                    privileged: Some(false),
+                    run_as_root: Some(false),
+                    sensitive_volumes: vec![],
+                },
+            ],
+            processes: vec![],
+        }],
+        routes: vec![aegis_ai_worker_ingest::domain::ProtoRoute {
+            kind: "docker".to_string(),
+            source_kind: "container".to_string(),
+            source_name: "portfolio-web".to_string(),
+            source_namespace: None,
+            target_kind: "container".to_string(),
+            target_name: "portfolio-db".to_string(),
+            target_namespace: None,
+            host: Some("source.example.test".to_string()),
+            path: Some("/login".to_string()),
+            path_type: None,
+            protocol: "http".to_string(),
+            source_port: Some(8080),
+            target_port: Some("5432".to_string()),
+            published_port: Some(18080),
+        }],
+        database_schemas: vec![aegis_ai_worker_ingest::domain::DatabaseSchema {
+            engine: "postgres".to_string(),
+            host: Some("portfolio-db".to_string()),
+            port: Some(5432),
+            database_name: Some("portfolio".to_string()),
+            username: Some("portfolio".to_string()),
+            source_container_id: "container-web".to_string(),
+            source_container_name: "portfolio-web".to_string(),
+            tables: vec![],
+        }],
+    };
+
+    let (statements, node_count) =
+        aegis_ai_worker_ingest::activities::build_neo4j_topology_statements(
+            &payload,
+            "agent-1",
+            "company-1",
+        );
+
+    assert_eq!(node_count, 5);
+
+    let serialized = serde_json::to_value(&statements).unwrap();
+    let statements = serialized.as_array().unwrap();
+
+    let containers = statements
+        .iter()
+        .find_map(|statement| statement["parameters"].get("containers"))
+        .and_then(|containers| containers.as_array())
+        .unwrap();
+    let web_container = containers
+        .iter()
+        .find(|container| container["name"] == "portfolio-web")
+        .unwrap();
+    assert_eq!(
+        web_container["imageArchiveRef"],
+        "minio:archives/portfolio-web.tar"
+    );
+    assert_eq!(
+        web_container["imageArchiveObject"],
+        "archives/portfolio-web.tar"
+    );
+    assert_eq!(
+        web_container["ports"],
+        serde_json::json!(["8080:tcp:LISTEN::18080:docker"])
+    );
+    assert_eq!(
+        web_container["exposedPorts"],
+        serde_json::json!(["8080:tcp::::dockerfile"])
+    );
+
+    let routes = statements
+        .iter()
+        .find_map(|statement| statement["parameters"].get("routes"))
+        .and_then(|routes| routes.as_array())
+        .unwrap();
+    assert_eq!(routes[0]["sourceName"], "portfolio-web");
+    assert_eq!(routes[0]["targetName"], "portfolio-db");
+    assert_eq!(routes[0]["host"], "source.example.test");
+
+    let database_schemas = statements
+        .iter()
+        .find_map(|statement| statement["parameters"].get("databaseSchemas"))
+        .and_then(|schemas| schemas.as_array())
+        .unwrap();
+    assert_eq!(database_schemas[0]["sourceContainerId"], "container-web");
+    assert_eq!(database_schemas[0]["sourceContainerName"], "portfolio-web");
+
+    let dependency_relations = statements
+        .iter()
+        .find(|statement| {
+            statement["statement"]
+                .as_str()
+                .unwrap()
+                .contains("DEPENDS_ON")
+        })
+        .and_then(|statement| statement["parameters"]["relations"].as_array())
+        .unwrap();
+    assert!(!dependency_relations.is_empty());
+    for relation in dependency_relations {
+        assert_eq!(relation["sourceId"], "company-1:agent-1:container-web");
+        assert_eq!(relation["targetId"], "company-1:agent-1:container-db");
+        assert!(relation.get("targetName").is_none());
+    }
+
+    let transaction_text = serde_json::to_string(&serialized).unwrap();
+    assert!(transaction_text.contains("USES_DATABASE"));
+    assert!(transaction_text.contains("DEPENDS_ON"));
+}
+
 #[tokio::test]
 async fn test_download_topology_file_success() {
     use aegis_ai_worker_ingest::activities::IngestActivities;

@@ -27,7 +27,7 @@ struct Neo4jTxResponse {
 }
 
 #[derive(Serialize)]
-struct Neo4jStatement {
+pub struct Neo4jStatement {
     statement: String,
     parameters: serde_json::Value,
 }
@@ -214,361 +214,8 @@ impl IngestActivities {
             .map_err(|e| anyhow::anyhow!("Failed to parse topology JSON: {}", e))?;
 
         let started_at = Instant::now();
-        let mut hosts = Vec::new();
-        let mut containers = Vec::new();
-        let mut processes = Vec::new();
-        let mut routes = Vec::new();
-        let mut route_endpoints = Vec::new();
-        let mut database_schemas = Vec::new();
-        let mut container_database_schemas = Vec::new();
-        let mut host_containers = Vec::new();
-        let mut host_processes = Vec::new();
-        let mut container_processes = Vec::new();
-        let mut container_networks = Vec::new();
-        let mut container_env_refs = Vec::new();
-        let mut container_name_to_id = std::collections::BTreeMap::new();
-        let mut route_sources = Vec::new();
-        let mut route_targets = Vec::new();
-
-        for host in &payload.hosts {
-            let host_id = scoped_topology_id(&company_id, &agent_id, &host.id);
-            hosts.push(json!({
-                "id": host_id,
-                "rawId": host.id,
-                "agentId": agent_id.clone(),
-                "companyId": company_id.clone(),
-                "hostname": host.hostname,
-                "ipAddresses": host.ip_addresses,
-            }));
-
-            for process in &host.processes {
-                let process_id = scoped_topology_id(
-                    &company_id,
-                    &agent_id,
-                    &format!("{}-proc-{}", host.id, process.pid),
-                );
-                processes.push(json!({
-                    "id": process_id,
-                    "agentId": agent_id.clone(),
-                    "companyId": company_id.clone(),
-                    "pid": process.pid,
-                    "name": process.name,
-                    "commandLine": process.command_line,
-                    "user": process.user,
-                }));
-                host_processes.push(json!({
-                    "hostId": host_id,
-                    "processId": process_id,
-                }));
-            }
-
-            for container in &host.containers {
-                let container_id = scoped_topology_id(&company_id, &agent_id, &container.id);
-                container_name_to_id
-                    .insert(container.name.to_ascii_lowercase(), container_id.clone());
-                containers.push(json!({
-                    "id": container_id,
-                    "rawId": container.id,
-                    "agentId": agent_id.clone(),
-                    "companyId": company_id.clone(),
-                    "name": container.name,
-                    "image": container.image,
-                    "imageVersion": container.image_version,
-                    "imageHash": container.image_hash,
-                    "imageSha256": container.image_sha256,
-                    "imageArchiveRef": container.image_archive_ref,
-                    "imageArchiveObject": container.image_archive_object,
-                    "env": env_pairs(&container.env),
-                    "labels": map_pairs(&container.labels),
-                    "networks": container.networks,
-                    "ports": port_descriptions(&container.ports),
-                    "exposedPorts": port_descriptions(&container.exposed_ports),
-                    "privileged": container.privileged,
-                    "runAsRoot": container.run_as_root,
-                    "sensitiveVolumes": container.sensitive_volumes,
-                }));
-                host_containers.push(json!({
-                    "hostId": host_id,
-                    "containerId": container_id,
-                }));
-                for network in &container.networks {
-                    container_networks.push(json!({
-                        "containerId": container_id,
-                        "networkId": scoped_topology_id(&company_id, &agent_id, &format!("network:{}", network)),
-                        "network": network,
-                        "agentId": agent_id.clone(),
-                        "companyId": company_id.clone(),
-                    }));
-                }
-                for (key, value) in &container.env {
-                    if is_dependency_env_key(key) {
-                        container_env_refs
-                            .push((container_id.clone(), dependency_host_from_env(value)));
-                    }
-                }
-
-                for process in &container.processes {
-                    let process_id = scoped_topology_id(
-                        &company_id,
-                        &agent_id,
-                        &format!("{}-proc-{}", container.id, process.pid),
-                    );
-                    processes.push(json!({
-                        "id": process_id,
-                        "agentId": agent_id.clone(),
-                        "companyId": company_id.clone(),
-                        "pid": process.pid,
-                        "name": process.name,
-                        "commandLine": process.command_line,
-                        "user": process.user,
-                    }));
-                    container_processes.push(json!({
-                        "containerId": container_id,
-                        "processId": process_id,
-                    }));
-                }
-            }
-        }
-
-        for route in &payload.routes {
-            let route_raw_id = format!(
-                "{}:{}:{}:{}:{}:{}:{}",
-                route.kind,
-                route.source_kind,
-                route.source_name,
-                route.target_kind,
-                route.target_name,
-                route.protocol,
-                route
-                    .published_port
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "none".to_string())
-            );
-            let route_id = scoped_topology_id(&company_id, &agent_id, &route_raw_id);
-
-            routes.push(json!({
-                "id": route_id,
-                "rawId": route_raw_id,
-                "agentId": agent_id.clone(),
-                "companyId": company_id.clone(),
-                "kind": route.kind,
-                "sourceKind": route.source_kind,
-                "sourceName": route.source_name,
-                "sourceNamespace": route.source_namespace,
-                "targetKind": route.target_kind,
-                "targetName": route.target_name,
-                "targetNamespace": route.target_namespace,
-                "host": route.host,
-                "path": route.path,
-                "pathType": route.path_type,
-                "protocol": route.protocol,
-                "sourcePort": route.source_port,
-                "targetPort": route.target_port,
-                "publishedPort": route.published_port,
-            }));
-
-            let source_raw_id = format!(
-                "{}:{}:{}",
-                route.source_kind,
-                route.source_namespace.clone().unwrap_or_default(),
-                route.source_name
-            );
-            let target_raw_id = format!(
-                "{}:{}:{}",
-                route.target_kind,
-                route.target_namespace.clone().unwrap_or_default(),
-                route.target_name
-            );
-            let source_id = scoped_topology_id(&company_id, &agent_id, &source_raw_id);
-            let target_id = scoped_topology_id(&company_id, &agent_id, &target_raw_id);
-
-            route_endpoints.push(json!({
-                "id": source_id,
-                "rawId": source_raw_id,
-                "agentId": agent_id.clone(),
-                "companyId": company_id.clone(),
-                "kind": route.source_kind,
-                "name": route.source_name,
-                "namespace": route.source_namespace,
-            }));
-            route_endpoints.push(json!({
-                "id": target_id,
-                "rawId": target_raw_id,
-                "agentId": agent_id.clone(),
-                "companyId": company_id.clone(),
-                "kind": route.target_kind,
-                "name": route.target_name,
-                "namespace": route.target_namespace,
-            }));
-            route_sources.push(json!({
-                "routeId": route_id,
-                "endpointId": source_id,
-            }));
-            route_targets.push(json!({
-                "routeId": route_id,
-                "endpointId": target_id,
-            }));
-        }
-
-        for schema in &payload.database_schemas {
-            let schema_raw_id = format!(
-                "database:{}:{}:{}:{}",
-                schema.engine,
-                schema.host.clone().unwrap_or_default(),
-                schema
-                    .port
-                    .map(|value| value.to_string())
-                    .unwrap_or_default(),
-                schema.database_name.clone().unwrap_or_default()
-            );
-            let schema_id = scoped_topology_id(&company_id, &agent_id, &schema_raw_id);
-            let source_container_graph_id = if schema.source_container_id.is_empty() {
-                None
-            } else {
-                Some(scoped_topology_id(
-                    &company_id,
-                    &agent_id,
-                    &schema.source_container_id,
-                ))
-            };
-
-            database_schemas.push(json!({
-                "id": schema_id.clone(),
-                "rawId": schema_raw_id,
-                "agentId": agent_id.clone(),
-                "companyId": company_id.clone(),
-                "engine": schema.engine,
-                "host": schema.host,
-                "port": schema.port,
-                "databaseName": schema.database_name,
-                "username": schema.username,
-                "sourceContainerId": schema.source_container_id,
-                "sourceContainerName": schema.source_container_name,
-                "tableCount": schema.tables.len(),
-            }));
-
-            if let Some(container_id) = source_container_graph_id {
-                container_database_schemas.push(json!({
-                    "containerId": container_id,
-                    "schemaId": schema_id,
-                }));
-            }
-        }
-
-        let node_count = hosts.len()
-            + containers.len()
-            + processes.len()
-            + routes.len()
-            + route_endpoints.len()
-            + database_schemas.len();
-        let mut statements = Vec::new();
-
-        if !hosts.is_empty() {
-            statements.push(Neo4jStatement {
-                statement: "UNWIND $hosts AS host MERGE (h:Host {id: host.id}) SET h.rawId = host.rawId, h.agentId = host.agentId, h.companyId = host.companyId, h.hostname = host.hostname, h.ipAddresses = host.ipAddresses".to_string(),
-                parameters: json!({ "hosts": hosts }),
-            });
-        }
-
-        if !containers.is_empty() {
-            statements.push(Neo4jStatement {
-                statement: "UNWIND $containers AS container MERGE (c:Container {id: container.id}) SET c.rawId = container.rawId, c.agentId = container.agentId, c.companyId = container.companyId, c.name = container.name, c.image = container.image, c.imageVersion = container.imageVersion, c.imageHash = container.imageHash, c.imageSha256 = container.imageSha256, c.imageArchiveRef = container.imageArchiveRef, c.imageArchiveObject = container.imageArchiveObject, c.env = container.env, c.labels = container.labels, c.networks = container.networks, c.ports = container.ports, c.exposedPorts = container.exposedPorts, c.privileged = container.privileged, c.runAsRoot = container.runAsRoot, c.sensitiveVolumes = container.sensitiveVolumes".to_string(),
-                parameters: json!({ "containers": containers }),
-            });
-        }
-
-        if !processes.is_empty() {
-            statements.push(Neo4jStatement {
-                statement: "UNWIND $processes AS process MERGE (p:Process {id: process.id}) SET p.agentId = process.agentId, p.companyId = process.companyId, p.name = process.name, p.commandLine = process.commandLine, p.user = process.user, p.pid = process.pid".to_string(),
-                parameters: json!({ "processes": processes }),
-            });
-        }
-
-        if !host_containers.is_empty() {
-            statements.push(Neo4jStatement {
-                statement: "UNWIND $relations AS relation MATCH (h:Host {id: relation.hostId}), (c:Container {id: relation.containerId}) MERGE (h)-[:RUNS_CONTAINER]->(c)".to_string(),
-                parameters: json!({ "relations": host_containers }),
-            });
-        }
-
-        if !host_processes.is_empty() {
-            statements.push(Neo4jStatement {
-                statement: "UNWIND $relations AS relation MATCH (h:Host {id: relation.hostId}), (p:Process {id: relation.processId}) MERGE (h)-[:RUNS_PROCESS]->(p)".to_string(),
-                parameters: json!({ "relations": host_processes }),
-            });
-        }
-
-        if !container_processes.is_empty() {
-            statements.push(Neo4jStatement {
-                statement: "UNWIND $relations AS relation MATCH (c:Container {id: relation.containerId}), (p:Process {id: relation.processId}) MERGE (c)-[:RUNS_PROCESS]->(p)".to_string(),
-                parameters: json!({ "relations": container_processes }),
-            });
-        }
-        if !container_networks.is_empty() {
-            statements.push(Neo4jStatement {
-                statement: "UNWIND $relations AS relation MERGE (n:Network {id: relation.networkId}) SET n.name = relation.network, n.agentId = relation.agentId, n.companyId = relation.companyId WITH relation, n MATCH (c:Container {id: relation.containerId}) MERGE (c)-[:CONNECTED_TO]->(n)".to_string(),
-                parameters: json!({ "relations": container_networks }),
-            });
-        }
-        let container_dependencies = container_env_refs
-            .into_iter()
-            .filter_map(|(source_id, target_name)| {
-                container_name_to_id.get(&target_name).map(|target_id| {
-                    json!({
-                        "sourceId": source_id,
-                        "targetId": target_id,
-                    })
-                })
-            })
-            .collect::<Vec<_>>();
-        if !container_dependencies.is_empty() {
-            statements.push(Neo4jStatement {
-                statement: "UNWIND $relations AS relation MATCH (source:Container {id: relation.sourceId}), (target:Container {id: relation.targetId}) MERGE (source)-[:DEPENDS_ON]->(target)".to_string(),
-                parameters: json!({ "relations": container_dependencies }),
-            });
-        }
-
-        if !routes.is_empty() {
-            statements.push(Neo4jStatement {
-                statement: "UNWIND $routes AS route MERGE (r:Route {id: route.id}) SET r.rawId = route.rawId, r.agentId = route.agentId, r.companyId = route.companyId, r.kind = route.kind, r.sourceKind = route.sourceKind, r.sourceName = route.sourceName, r.sourceNamespace = route.sourceNamespace, r.targetKind = route.targetKind, r.targetName = route.targetName, r.targetNamespace = route.targetNamespace, r.host = route.host, r.path = route.path, r.pathType = route.pathType, r.protocol = route.protocol, r.sourcePort = route.sourcePort, r.targetPort = route.targetPort, r.publishedPort = route.publishedPort".to_string(),
-                parameters: json!({ "routes": routes }),
-            });
-        }
-
-        if !route_endpoints.is_empty() {
-            statements.push(Neo4jStatement {
-                statement: "UNWIND $endpoints AS endpoint MERGE (e:RouteEndpoint {id: endpoint.id}) SET e.rawId = endpoint.rawId, e.agentId = endpoint.agentId, e.companyId = endpoint.companyId, e.kind = endpoint.kind, e.name = endpoint.name, e.namespace = endpoint.namespace".to_string(),
-                parameters: json!({ "endpoints": route_endpoints }),
-            });
-        }
-
-        if !route_sources.is_empty() {
-            statements.push(Neo4jStatement {
-                statement: "UNWIND $relations AS relation MATCH (r:Route {id: relation.routeId}), (e:RouteEndpoint {id: relation.endpointId}) MERGE (r)-[:ROUTE_FROM]->(e)".to_string(),
-                parameters: json!({ "relations": route_sources }),
-            });
-        }
-
-        if !route_targets.is_empty() {
-            statements.push(Neo4jStatement {
-                statement: "UNWIND $relations AS relation MATCH (r:Route {id: relation.routeId}), (e:RouteEndpoint {id: relation.endpointId}) MERGE (r)-[:ROUTE_TO]->(e)".to_string(),
-                parameters: json!({ "relations": route_targets }),
-            });
-        }
-
-        if !database_schemas.is_empty() {
-            statements.push(Neo4jStatement {
-                statement: "UNWIND $databaseSchemas AS schema MERGE (d:DatabaseSchema {id: schema.id}) SET d.rawId = schema.rawId, d.agentId = schema.agentId, d.companyId = schema.companyId, d.engine = schema.engine, d.host = schema.host, d.port = schema.port, d.databaseName = schema.databaseName, d.username = schema.username, d.sourceContainerId = schema.sourceContainerId, d.sourceContainerName = schema.sourceContainerName, d.tableCount = schema.tableCount".to_string(),
-                parameters: json!({ "databaseSchemas": database_schemas }),
-            });
-        }
-
-        if !container_database_schemas.is_empty() {
-            statements.push(Neo4jStatement {
-                statement: "UNWIND $relations AS relation MATCH (c:Container {id: relation.containerId}), (d:DatabaseSchema {id: relation.schemaId}) MERGE (c)-[:USES_DATABASE]->(d)".to_string(),
-                parameters: json!({ "relations": container_database_schemas }),
-            });
-        }
+        let (statements, node_count) =
+            build_neo4j_topology_statements(&payload, &agent_id, &company_id);
 
         if !statements.is_empty() {
             let statement_count = statements.len();
@@ -616,6 +263,379 @@ impl IngestActivities {
 
         Ok(())
     }
+}
+
+pub fn build_neo4j_topology_statements(
+    payload: &NetworkTopologyPayload,
+    agent_id: &str,
+    company_id: &str,
+) -> (Vec<Neo4jStatement>, usize) {
+    let mut hosts = Vec::new();
+    let mut containers = Vec::new();
+    let mut processes = Vec::new();
+    let mut routes = Vec::new();
+    let mut route_endpoints = Vec::new();
+    let mut database_schemas = Vec::new();
+    let mut container_database_schemas = Vec::new();
+    let mut host_containers = Vec::new();
+    let mut host_processes = Vec::new();
+    let mut container_processes = Vec::new();
+    let mut container_networks = Vec::new();
+    let mut container_env_refs = Vec::new();
+    let mut container_name_to_id = std::collections::BTreeMap::new();
+    let mut route_sources = Vec::new();
+    let mut route_targets = Vec::new();
+
+    for host in &payload.hosts {
+        let host_id = scoped_topology_id(company_id, agent_id, &host.id);
+        hosts.push(json!({
+            "id": host_id,
+            "rawId": host.id,
+            "agentId": agent_id,
+            "companyId": company_id,
+            "hostname": host.hostname,
+            "ipAddresses": host.ip_addresses,
+        }));
+
+        for process in &host.processes {
+            let process_id = scoped_topology_id(
+                company_id,
+                agent_id,
+                &format!("{}-proc-{}", host.id, process.pid),
+            );
+            processes.push(json!({
+                "id": process_id,
+                "agentId": agent_id,
+                "companyId": company_id,
+                "pid": process.pid,
+                "name": process.name,
+                "commandLine": process.command_line,
+                "user": process.user,
+            }));
+            host_processes.push(json!({
+                "hostId": host_id,
+                "processId": process_id,
+            }));
+        }
+
+        for container in &host.containers {
+            let container_id = scoped_topology_id(company_id, agent_id, &container.id);
+            container_name_to_id.insert(container.name.to_ascii_lowercase(), container_id.clone());
+            containers.push(json!({
+                "id": container_id,
+                "rawId": container.id,
+                "agentId": agent_id,
+                "companyId": company_id,
+                "name": container.name,
+                "image": container.image,
+                "imageVersion": container.image_version,
+                "imageHash": container.image_hash,
+                "imageSha256": container.image_sha256,
+                "imageArchiveRef": container.image_archive_ref,
+                "imageArchiveObject": container.image_archive_object,
+                "env": env_pairs(&container.env),
+                "labels": map_pairs(&container.labels),
+                "networks": container.networks,
+                "ports": port_descriptions(&container.ports),
+                "exposedPorts": port_descriptions(&container.exposed_ports),
+                "privileged": container.privileged,
+                "runAsRoot": container.run_as_root,
+                "sensitiveVolumes": container.sensitive_volumes,
+            }));
+            host_containers.push(json!({
+                "hostId": host_id,
+                "containerId": container_id,
+            }));
+            for network in &container.networks {
+                container_networks.push(json!({
+                        "containerId": container_id,
+                        "networkId": scoped_topology_id(company_id, agent_id, &format!("network:{}", network)),
+                        "network": network,
+                        "agentId": agent_id,
+                        "companyId": company_id,
+                    }));
+            }
+            for (key, value) in &container.env {
+                if is_dependency_env_key(key) {
+                    container_env_refs
+                        .push((container_id.clone(), dependency_host_from_env(value)));
+                }
+            }
+
+            for process in &container.processes {
+                let process_id = scoped_topology_id(
+                    company_id,
+                    agent_id,
+                    &format!("{}-proc-{}", container.id, process.pid),
+                );
+                processes.push(json!({
+                    "id": process_id,
+                    "agentId": agent_id,
+                    "companyId": company_id,
+                    "pid": process.pid,
+                    "name": process.name,
+                    "commandLine": process.command_line,
+                    "user": process.user,
+                }));
+                container_processes.push(json!({
+                    "containerId": container_id,
+                    "processId": process_id,
+                }));
+            }
+        }
+    }
+
+    for route in &payload.routes {
+        let route_raw_id = format!(
+            "{}:{}:{}:{}:{}:{}:{}",
+            route.kind,
+            route.source_kind,
+            route.source_name,
+            route.target_kind,
+            route.target_name,
+            route.protocol,
+            route
+                .published_port
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "none".to_string())
+        );
+        let route_id = scoped_topology_id(company_id, agent_id, &route_raw_id);
+
+        routes.push(json!({
+            "id": route_id,
+            "rawId": route_raw_id,
+            "agentId": agent_id,
+            "companyId": company_id,
+            "kind": route.kind,
+            "sourceKind": route.source_kind,
+            "sourceName": route.source_name,
+            "sourceNamespace": route.source_namespace,
+            "targetKind": route.target_kind,
+            "targetName": route.target_name,
+            "targetNamespace": route.target_namespace,
+            "host": route.host,
+            "path": route.path,
+            "pathType": route.path_type,
+            "protocol": route.protocol,
+            "sourcePort": route.source_port,
+            "targetPort": route.target_port,
+            "publishedPort": route.published_port,
+        }));
+
+        let source_raw_id = format!(
+            "{}:{}:{}",
+            route.source_kind,
+            route.source_namespace.clone().unwrap_or_default(),
+            route.source_name
+        );
+        let target_raw_id = format!(
+            "{}:{}:{}",
+            route.target_kind,
+            route.target_namespace.clone().unwrap_or_default(),
+            route.target_name
+        );
+        let source_id = scoped_topology_id(company_id, agent_id, &source_raw_id);
+        let target_id = scoped_topology_id(company_id, agent_id, &target_raw_id);
+
+        route_endpoints.push(json!({
+            "id": source_id,
+            "rawId": source_raw_id,
+            "agentId": agent_id,
+            "companyId": company_id,
+            "kind": route.source_kind,
+            "name": route.source_name,
+            "namespace": route.source_namespace,
+        }));
+        route_endpoints.push(json!({
+            "id": target_id,
+            "rawId": target_raw_id,
+            "agentId": agent_id,
+            "companyId": company_id,
+            "kind": route.target_kind,
+            "name": route.target_name,
+            "namespace": route.target_namespace,
+        }));
+        route_sources.push(json!({
+            "routeId": route_id,
+            "endpointId": source_id,
+        }));
+        route_targets.push(json!({
+            "routeId": route_id,
+            "endpointId": target_id,
+        }));
+    }
+
+    for schema in &payload.database_schemas {
+        let schema_raw_id = format!(
+            "database:{}:{}:{}:{}",
+            schema.engine,
+            schema.host.clone().unwrap_or_default(),
+            schema
+                .port
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            schema.database_name.clone().unwrap_or_default()
+        );
+        let schema_id = scoped_topology_id(company_id, agent_id, &schema_raw_id);
+        let source_container_graph_id = if schema.source_container_id.is_empty() {
+            None
+        } else {
+            Some(scoped_topology_id(
+                company_id,
+                agent_id,
+                &schema.source_container_id,
+            ))
+        };
+
+        database_schemas.push(json!({
+            "id": schema_id.clone(),
+            "rawId": schema_raw_id,
+            "agentId": agent_id,
+            "companyId": company_id,
+            "engine": schema.engine,
+            "host": schema.host,
+            "port": schema.port,
+            "databaseName": schema.database_name,
+            "username": schema.username,
+            "sourceContainerId": schema.source_container_id,
+            "sourceContainerName": schema.source_container_name,
+            "tableCount": schema.tables.len(),
+        }));
+
+        if let Some(container_id) = source_container_graph_id {
+            container_database_schemas.push(json!({
+                "containerId": container_id,
+                "schemaId": schema_id,
+            }));
+        }
+    }
+
+    let node_count =
+        hosts.len() + containers.len() + processes.len() + routes.len() + database_schemas.len();
+    let mut statements = Vec::new();
+
+    if !hosts.is_empty() {
+        statements.push(Neo4jStatement {
+                statement: "UNWIND $hosts AS host MERGE (h:Host {id: host.id}) SET h.rawId = host.rawId, h.agentId = host.agentId, h.companyId = host.companyId, h.hostname = host.hostname, h.ipAddresses = host.ipAddresses".to_string(),
+                parameters: json!({ "hosts": hosts }),
+            });
+    }
+
+    if !containers.is_empty() {
+        statements.push(Neo4jStatement {
+                statement: "UNWIND $containers AS container MERGE (c:Container {id: container.id}) SET c.rawId = container.rawId, c.agentId = container.agentId, c.companyId = container.companyId, c.name = container.name, c.image = container.image, c.imageVersion = container.imageVersion, c.imageHash = container.imageHash, c.imageSha256 = container.imageSha256, c.imageArchiveRef = container.imageArchiveRef, c.imageArchiveObject = container.imageArchiveObject, c.env = container.env, c.labels = container.labels, c.networks = container.networks, c.ports = container.ports, c.exposedPorts = container.exposedPorts, c.privileged = container.privileged, c.runAsRoot = container.runAsRoot, c.sensitiveVolumes = container.sensitiveVolumes".to_string(),
+                parameters: json!({ "containers": containers }),
+            });
+    }
+
+    if !processes.is_empty() {
+        statements.push(Neo4jStatement {
+                statement: "UNWIND $processes AS process MERGE (p:Process {id: process.id}) SET p.agentId = process.agentId, p.companyId = process.companyId, p.name = process.name, p.commandLine = process.commandLine, p.user = process.user, p.pid = process.pid".to_string(),
+                parameters: json!({ "processes": processes }),
+            });
+    }
+
+    if !host_containers.is_empty() {
+        statements.push(Neo4jStatement {
+                statement: "UNWIND $relations AS relation MATCH (h:Host {id: relation.hostId}), (c:Container {id: relation.containerId}) MERGE (h)-[:RUNS_CONTAINER]->(c)".to_string(),
+                parameters: json!({ "relations": host_containers }),
+            });
+    }
+
+    if !host_processes.is_empty() {
+        statements.push(Neo4jStatement {
+                statement: "UNWIND $relations AS relation MATCH (h:Host {id: relation.hostId}), (p:Process {id: relation.processId}) MERGE (h)-[:RUNS_PROCESS]->(p)".to_string(),
+                parameters: json!({ "relations": host_processes }),
+            });
+    }
+
+    if !container_processes.is_empty() {
+        statements.push(Neo4jStatement {
+                statement: "UNWIND $relations AS relation MATCH (c:Container {id: relation.containerId}), (p:Process {id: relation.processId}) MERGE (c)-[:RUNS_PROCESS]->(p)".to_string(),
+                parameters: json!({ "relations": container_processes }),
+            });
+    }
+    if !container_networks.is_empty() {
+        statements.push(Neo4jStatement {
+                statement: "UNWIND $relations AS relation MERGE (n:Network {id: relation.networkId}) SET n.name = relation.network, n.agentId = relation.agentId, n.companyId = relation.companyId WITH relation, n MATCH (c:Container {id: relation.containerId}) MERGE (c)-[:CONNECTED_TO]->(n)".to_string(),
+                parameters: json!({ "relations": container_networks }),
+            });
+    }
+    let mut container_dependencies = container_env_refs
+        .into_iter()
+        .filter_map(|(source_id, target_name)| {
+            container_name_to_id.get(&target_name).map(|target_id| {
+                json!({
+                    "sourceId": source_id,
+                    "targetId": target_id,
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+    for route in &payload.routes {
+        if route.source_kind == "container"
+            && route.target_kind == "container"
+            && let (Some(source_id), Some(target_id)) = (
+                container_name_to_id.get(&route.source_name.to_ascii_lowercase()),
+                container_name_to_id.get(&route.target_name.to_ascii_lowercase()),
+            )
+        {
+            container_dependencies.push(json!({
+                "sourceId": source_id,
+                "targetId": target_id,
+            }));
+        }
+    }
+    if !container_dependencies.is_empty() {
+        statements.push(Neo4jStatement {
+                statement: "UNWIND $relations AS relation MATCH (source:Container {id: relation.sourceId}), (target:Container {id: relation.targetId}) MERGE (source)-[:DEPENDS_ON]->(target)".to_string(),
+                parameters: json!({ "relations": container_dependencies }),
+            });
+    }
+
+    if !routes.is_empty() {
+        statements.push(Neo4jStatement {
+                statement: "UNWIND $routes AS route MERGE (r:Route {id: route.id}) SET r.rawId = route.rawId, r.agentId = route.agentId, r.companyId = route.companyId, r.kind = route.kind, r.sourceKind = route.sourceKind, r.sourceName = route.sourceName, r.sourceNamespace = route.sourceNamespace, r.targetKind = route.targetKind, r.targetName = route.targetName, r.targetNamespace = route.targetNamespace, r.host = route.host, r.path = route.path, r.pathType = route.pathType, r.protocol = route.protocol, r.sourcePort = route.sourcePort, r.targetPort = route.targetPort, r.publishedPort = route.publishedPort".to_string(),
+                parameters: json!({ "routes": routes }),
+            });
+    }
+
+    if !route_endpoints.is_empty() {
+        statements.push(Neo4jStatement {
+                statement: "UNWIND $endpoints AS endpoint MERGE (e:RouteEndpoint {id: endpoint.id}) SET e.rawId = endpoint.rawId, e.agentId = endpoint.agentId, e.companyId = endpoint.companyId, e.kind = endpoint.kind, e.name = endpoint.name, e.namespace = endpoint.namespace".to_string(),
+                parameters: json!({ "endpoints": route_endpoints }),
+            });
+    }
+
+    if !route_sources.is_empty() {
+        statements.push(Neo4jStatement {
+                statement: "UNWIND $relations AS relation MATCH (r:Route {id: relation.routeId}), (e:RouteEndpoint {id: relation.endpointId}) MERGE (r)-[:ROUTE_FROM]->(e)".to_string(),
+                parameters: json!({ "relations": route_sources }),
+            });
+    }
+
+    if !route_targets.is_empty() {
+        statements.push(Neo4jStatement {
+                statement: "UNWIND $relations AS relation MATCH (r:Route {id: relation.routeId}), (e:RouteEndpoint {id: relation.endpointId}) MERGE (r)-[:ROUTE_TO]->(e)".to_string(),
+                parameters: json!({ "relations": route_targets }),
+            });
+    }
+
+    if !database_schemas.is_empty() {
+        statements.push(Neo4jStatement {
+                statement: "UNWIND $databaseSchemas AS schema MERGE (d:DatabaseSchema {id: schema.id}) SET d.rawId = schema.rawId, d.agentId = schema.agentId, d.companyId = schema.companyId, d.engine = schema.engine, d.host = schema.host, d.port = schema.port, d.databaseName = schema.databaseName, d.username = schema.username, d.sourceContainerId = schema.sourceContainerId, d.sourceContainerName = schema.sourceContainerName, d.tableCount = schema.tableCount".to_string(),
+                parameters: json!({ "databaseSchemas": database_schemas }),
+            });
+    }
+
+    if !container_database_schemas.is_empty() {
+        statements.push(Neo4jStatement {
+                statement: "UNWIND $relations AS relation MATCH (c:Container {id: relation.containerId}), (d:DatabaseSchema {id: relation.schemaId}) MERGE (c)-[:USES_DATABASE]->(d)".to_string(),
+                parameters: json!({ "relations": container_database_schemas }),
+            });
+    }
+
+    (statements, node_count)
 }
 
 fn scoped_topology_id(company_id: &str, agent_id: &str, raw_id: &str) -> String {
